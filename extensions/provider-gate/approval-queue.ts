@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { extractLatestUserMessage } from "./payload-inspection.ts";
 
 export type ReviewDecision = "approved" | "rejected" | "cancelled";
 export type ReviewStatus = "pending" | ReviewDecision;
@@ -19,8 +20,10 @@ export interface ProviderReview {
 	sequence: number;
 	createdAt: string;
 	payload: string;
+	userMessage: string | undefined;
 	bytes: number;
 	status: ReviewStatus;
+	modified: boolean;
 }
 
 export interface ReviewHandle {
@@ -68,8 +71,10 @@ export class ApprovalQueue {
 			sequence: this.nextSequence++,
 			createdAt: new Date().toISOString(),
 			payload: serialized,
+			userMessage: extractLatestUserMessage(payload),
 			bytes: Buffer.byteLength(serialized),
 			status: "pending",
+			modified: false,
 		};
 
 		let resolveDecision!: (resolution: ReviewResolution) => void;
@@ -111,11 +116,21 @@ export class ApprovalQueue {
 
 		review.payload = candidate;
 		review.bytes = Buffer.byteLength(candidate);
+		review.userMessage = extractLatestUserMessage(payload);
+		review.modified = true;
 		return { accepted: this.finish(id, { decision: "approved", modified: true, payload }) };
 	}
 
 	reject(id: string): boolean {
 		return this.finish(id, { decision: "rejected", modified: false });
+	}
+
+	approveAll(): number {
+		let approved = 0;
+		for (const review of this.reviews) {
+			if (review.status === "pending" && this.approve(review.id, review.payload).accepted) approved++;
+		}
+		return approved;
 	}
 
 	snapshot(): ProviderReview[] {

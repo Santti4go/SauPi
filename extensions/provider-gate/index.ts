@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { ApprovalQueue } from "./approval-queue.ts";
+import { shouldGatePayload } from "./payload-inspection.ts";
 import { openBrowser, ProviderGateServer } from "./server.ts";
 
 function validPort(value: boolean | string | undefined): number {
@@ -15,6 +16,9 @@ export default function providerGate(pi: ExtensionAPI): void {
 	let server: ProviderGateServer | undefined;
 	let url: string | undefined;
 	let startupError: string | undefined;
+	let enabled = true;
+
+	const statusText = () => (enabled ? "provider gate: armed" : "provider gate: bypass");
 
 	// Pi registra estas opciones como flags propias de la extensión.
 	pi.registerFlag("provider-gate-port", {
@@ -35,7 +39,7 @@ export default function providerGate(pi: ExtensionAPI): void {
 			startupError = undefined;
 			if (!pi.getFlag("provider-gate-no-open")) openBrowser(url);
 			if (ctx.hasUI) {
-				ctx.ui.setStatus("provider-gate", "provider gate: armed");
+				ctx.ui.setStatus("provider-gate", statusText());
 				ctx.ui.notify(`Provider authorization UI: ${url}`, "info");
 			}
 		} catch (error) {
@@ -46,6 +50,7 @@ export default function providerGate(pi: ExtensionAPI): void {
 
 	// Pi espera este handler antes de entregar el payload serializado al provider.
 	pi.on("before_provider_request", async (event, ctx) => {
+		if (!enabled || !shouldGatePayload(event.payload)) return undefined;
 		if (!server || !url || startupError) {
 			ctx.abort();
 			if (ctx.hasUI) ctx.ui.notify(`Provider request rejected: ${startupError ?? "gate is unavailable"}`, "error");
@@ -57,13 +62,13 @@ export default function providerGate(pi: ExtensionAPI): void {
 		const resolution = await handle.decision;
 
 		if (resolution.decision === "approved") {
-			if (ctx.hasUI) ctx.ui.setStatus("provider-gate", "provider gate: armed");
+			if (ctx.hasUI) ctx.ui.setStatus("provider-gate", statusText());
 			return resolution.modified ? resolution.payload : undefined;
 		}
 
 		if (resolution.decision === "rejected") ctx.abort();
 		if (ctx.hasUI) {
-			ctx.ui.setStatus("provider-gate", "provider gate: armed");
+			ctx.ui.setStatus("provider-gate", statusText());
 			ctx.ui.notify(
 				resolution.decision === "rejected" ? "Provider request rejected" : "Provider review cancelled",
 				"warning",
@@ -82,6 +87,26 @@ export default function providerGate(pi: ExtensionAPI): void {
 			}
 			openBrowser(url);
 			ctx.ui.notify(`Provider authorization UI: ${url}`, "info");
+		},
+	});
+
+	// Estos comandos de Pi alternan la compuerta durante la sesión actual.
+	pi.registerCommand("gate-off", {
+		description: "Bypass provider request approval for this session",
+		handler: async (_args, ctx) => {
+			enabled = false;
+			const released = queue.approveAll();
+			ctx.ui.setStatus("provider-gate", statusText());
+			ctx.ui.notify(`Provider gate disabled${released > 0 ? `; released ${released} pending request(s)` : ""}`, "warning");
+		},
+	});
+
+	pi.registerCommand("gate-on", {
+		description: "Require provider request approval for this session",
+		handler: async (_args, ctx) => {
+			enabled = true;
+			ctx.ui.setStatus("provider-gate", statusText());
+			ctx.ui.notify("Provider gate enabled", "info");
 		},
 	});
 

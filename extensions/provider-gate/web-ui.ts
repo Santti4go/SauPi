@@ -35,6 +35,7 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
     .approved .status { color: #68d984; }
     .edited { color: #d8c86c; }
     .actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; }
+    .view-active { border-color: #72ff94; color: #72ff94; }
     button { border: 1px solid #42644a; background: #122017; color: #d7e2d8; padding: 7px 13px; font: inherit; cursor: pointer; }
     button:hover { border-color: #72ff94; }
     button.reject:hover { border-color: #ff7087; color: #ff9cab; }
@@ -60,6 +61,7 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
     const drafts = new Map();
     const editing = new Set();
     const errors = new Map();
+    const views = new Map();
     const root = document.querySelector("#reviews");
     const history = document.querySelector("#history");
     const sidebar = document.querySelector("#sidebar");
@@ -72,6 +74,75 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
 
     function currentText(review) {
       return drafts.get(review.id) ?? review.payload;
+    }
+
+    function isObject(value) {
+      return typeof value === "object" && value !== null && !Array.isArray(value);
+    }
+
+    function containsToolData(value) {
+      if (Array.isArray(value)) return value.some(containsToolData);
+      if (!isObject(value)) return false;
+      if (["function_call", "function_call_output", "tool_call", "tool_result", "functionResponse"].includes(value.type) || value.role === "tool") return true;
+      return (Array.isArray(value.content) && value.content.some(containsToolData)) || (Array.isArray(value.parts) && value.parts.some(containsToolData));
+    }
+
+    function isHumanUser(value) {
+      return isObject(value) && value.role === "user" && !containsToolData(value);
+    }
+
+    function itemList(payload) {
+      if (!isObject(payload)) return undefined;
+      if (Array.isArray(payload.input)) return { owner: payload, key: "input", items: payload.input };
+      if (Array.isArray(payload.messages)) return { owner: payload, key: "messages", items: payload.messages };
+      if (Array.isArray(payload.contents)) return { owner: payload, key: "contents", items: payload.contents };
+      return undefined;
+    }
+
+    function collectText(value, output) {
+      if (typeof value === "string") output.push(value);
+      else if (Array.isArray(value)) for (const item of value) collectText(item, output);
+      else if (isObject(value)) {
+        if (typeof value.text === "string") output.push(value.text);
+        else if (typeof value.content === "string") output.push(value.content);
+        else if (Array.isArray(value.content)) collectText(value.content, output);
+      }
+    }
+
+    function userMessage(text, fallback) {
+      try {
+        const payload = JSON.parse(text);
+        if (typeof payload.input === "string") return payload.input;
+        const list = itemList(payload);
+        const user = list ? [...list.items].reverse().find(isHumanUser) : undefined;
+        if (!user) return fallback ?? "No human user message found.";
+        const output = [];
+        collectText(user.content ?? user.parts ?? user.text, output);
+        return output.length > 0 ? output.join("\n") : JSON.stringify(user, null, 2);
+      } catch {
+        return fallback ?? "The edited payload is not valid JSON.";
+      }
+    }
+
+    function removeLastTurn(review) {
+      errors.delete(review.id);
+      try {
+        const payload = JSON.parse(currentText(review));
+        const list = itemList(payload);
+        if (!list) throw new Error("This payload has no editable input/messages list.");
+        const users = list.items.map((item, index) => isHumanUser(item) ? index : -1).filter(index => index >= 0);
+        if (users.length < 2) throw new Error("There is no previous complete user/assistant turn to remove.");
+        const currentUser = users.at(-1);
+        const previousUser = users.at(-2);
+        if (currentUser !== list.items.length - 1) throw new Error("The final payload item is not the current user message.");
+        list.items.splice(previousUser, currentUser - previousUser);
+        drafts.set(review.id, JSON.stringify(payload, null, 2));
+        views.set(review.id, "payload");
+        editing.delete(review.id);
+      } catch (error) {
+        errors.set(review.id, error instanceof Error ? error.message : String(error));
+      }
+      render();
     }
 
     async function decide(review, decision) {
@@ -160,7 +231,7 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
         const size = document.createElement("span");
         size.textContent = formatBytes(new TextEncoder().encode(currentText(review)).length);
         meta.append(number, status, timestamp, size);
-        if (drafts.has(review.id) && currentText(review) !== review.payload) {
+        if (review.modified || (drafts.has(review.id) && currentText(review) !== review.payload)) {
           const edited = document.createElement("span");
           edited.className = "edited";
           edited.textContent = "EDITED";
@@ -173,6 +244,16 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
         copy.textContent = "COPY";
         copy.onclick = () => copyPayload(review, copy);
         actions.append(copy);
+
+        const payloadView = document.createElement("button");
+        payloadView.textContent = "PAYLOAD";
+        if ((views.get(review.id) ?? "payload") === "payload") payloadView.className = "view-active";
+        payloadView.onclick = () => { views.set(review.id, "payload"); render(); };
+        const userView = document.createElement("button");
+        userView.textContent = "USER";
+        if (views.get(review.id) === "user") userView.className = "view-active";
+        userView.onclick = () => { views.set(review.id, "user"); render(); };
+        actions.append(payloadView, userView);
         if (review.status === "pending") {
           const edit = document.createElement("button");
           edit.textContent = editing.has(review.id) ? "PREVIEW" : "EDIT";
@@ -184,13 +265,20 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
           reject.className = "reject";
           reject.textContent = "REJECT";
           reject.onclick = () => decide(review, "reject");
-          actions.append(edit, approve, reject);
+          const removeTurn = document.createElement("button");
+          removeTurn.className = "reject";
+          removeTurn.textContent = "DROP LAST TURN";
+          removeTurn.onclick = () => removeLastTurn(review);
+          actions.append(edit, removeTurn, approve, reject);
         }
         meta.append(actions);
 
         const text = currentText(review);
         let payload;
-        if (editing.has(review.id) && review.status === "pending") {
+        if (views.get(review.id) === "user") {
+          payload = document.createElement("pre");
+          payload.textContent = userMessage(text, review.userMessage);
+        } else if (editing.has(review.id) && review.status === "pending") {
           payload = document.createElement("textarea");
           payload.id = "editor-" + review.id;
           payload.value = text;

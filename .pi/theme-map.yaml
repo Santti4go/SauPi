@@ -1,0 +1,11 @@
+activeProfile: dark
+fallbackTheme: dark
+
+profiles:
+  dark:
+    theme: dark
+    title: "π - dark"
+
+  pixel-green:
+    theme: pixel-green
+    title: "π - pixel green"
