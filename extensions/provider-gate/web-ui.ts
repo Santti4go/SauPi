@@ -34,6 +34,8 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
     .rejected .status { color: #ff7087; }
     .approved .status { color: #68d984; }
     .edited { color: #d8c86c; }
+    .projected { color: #7bb8ff; }
+    .request-only { color: #ff9cab; }
     .actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; }
     .view-active { border-color: #72ff94; color: #72ff94; }
     button { border: 1px solid #42644a; background: #122017; color: #d7e2d8; padding: 7px 13px; font: inherit; cursor: pointer; }
@@ -73,7 +75,7 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
     }
 
     function currentText(review) {
-      return drafts.get(review.id) ?? review.payload;
+      return drafts.get(review.id) ?? review.sentPayload;
     }
 
     function isObject(value) {
@@ -124,23 +126,19 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
       }
     }
 
-    function removeLastTurn(review) {
+    async function removeLastTurn(review) {
       errors.delete(review.id);
-      try {
-        const payload = JSON.parse(currentText(review));
-        const list = itemList(payload);
-        if (!list) throw new Error("This payload has no editable input/messages list.");
-        const users = list.items.map((item, index) => isHumanUser(item) ? index : -1).filter(index => index >= 0);
-        if (users.length < 2) throw new Error("There is no previous complete user/assistant turn to remove.");
-        const currentUser = users.at(-1);
-        const previousUser = users.at(-2);
-        if (currentUser !== list.items.length - 1) throw new Error("The final payload item is not the current user message.");
-        list.items.splice(previousUser, currentUser - previousUser);
-        drafts.set(review.id, JSON.stringify(payload, null, 2));
-        views.set(review.id, "payload");
+      const response = await fetch("/requests/" + encodeURIComponent(review.id) + "/drop-last-turn?token=" + encodeURIComponent(token), {
+        method: "POST",
+        headers: { "content-type": "text/plain; charset=utf-8" },
+        body: currentText(review)
+      });
+      if (response.ok) {
+        drafts.delete(review.id);
         editing.delete(review.id);
-      } catch (error) {
-        errors.set(review.id, error instanceof Error ? error.message : String(error));
+        views.set(review.id, "sent");
+      } else {
+        errors.set(review.id, await response.text());
       }
       render();
     }
@@ -160,7 +158,8 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
     }
 
     async function copyPayload(review, button) {
-      const text = currentText(review);
+      const view = views.get(review.id) ?? "sent";
+      const text = view === "raw" ? review.rawPayload : view === "user" ? userMessage(currentText(review), review.userMessage) : currentText(review);
       try {
         await navigator.clipboard.writeText(text);
       } catch {
@@ -179,7 +178,8 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
       if (editing.has(review.id)) editing.delete(review.id);
       else {
         editing.add(review.id);
-        if (!drafts.has(review.id)) drafts.set(review.id, review.payload);
+        views.set(review.id, "sent");
+        if (!drafts.has(review.id)) drafts.set(review.id, review.sentPayload);
       }
       errors.delete(review.id);
       render();
@@ -231,11 +231,23 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
         const size = document.createElement("span");
         size.textContent = formatBytes(new TextEncoder().encode(currentText(review)).length);
         meta.append(number, status, timestamp, size);
-        if (review.modified || (drafts.has(review.id) && currentText(review) !== review.payload)) {
+        if (review.modified || (drafts.has(review.id) && currentText(review) !== review.sentPayload)) {
           const edited = document.createElement("span");
           edited.className = "edited";
           edited.textContent = "EDITED";
           meta.append(edited);
+        }
+        if (review.appliedOperations > 0) {
+          const projected = document.createElement("span");
+          projected.className = "projected";
+          projected.textContent = review.appliedOperations + " PROJECTED";
+          meta.append(projected);
+        }
+        if (review.requestOnlyChanges) {
+          const requestOnly = document.createElement("span");
+          requestOnly.className = "request-only";
+          requestOnly.textContent = "REQUEST-ONLY";
+          meta.append(requestOnly);
         }
 
         const actions = document.createElement("div");
@@ -246,14 +258,18 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
         actions.append(copy);
 
         const payloadView = document.createElement("button");
-        payloadView.textContent = "PAYLOAD";
-        if ((views.get(review.id) ?? "payload") === "payload") payloadView.className = "view-active";
-        payloadView.onclick = () => { views.set(review.id, "payload"); render(); };
+        payloadView.textContent = "SENT";
+        if ((views.get(review.id) ?? "sent") === "sent") payloadView.className = "view-active";
+        payloadView.onclick = () => { views.set(review.id, "sent"); render(); };
+        const rawView = document.createElement("button");
+        rawView.textContent = "RAW PI";
+        if (views.get(review.id) === "raw") rawView.className = "view-active";
+        rawView.onclick = () => { views.set(review.id, "raw"); render(); };
         const userView = document.createElement("button");
         userView.textContent = "USER";
         if (views.get(review.id) === "user") userView.className = "view-active";
         userView.onclick = () => { views.set(review.id, "user"); render(); };
-        actions.append(payloadView, userView);
+        actions.append(payloadView, rawView, userView);
         if (review.status === "pending") {
           const edit = document.createElement("button");
           edit.textContent = editing.has(review.id) ? "PREVIEW" : "EDIT";
@@ -275,7 +291,10 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
 
         const text = currentText(review);
         let payload;
-        if (views.get(review.id) === "user") {
+        if (views.get(review.id) === "raw") {
+          payload = document.createElement("pre");
+          payload.textContent = review.rawPayload;
+        } else if (views.get(review.id) === "user") {
           payload = document.createElement("pre");
           payload.textContent = userMessage(text, review.userMessage);
         } else if (editing.has(review.id) && review.status === "pending") {
@@ -297,6 +316,12 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
           error.className = "error";
           error.textContent = errors.get(review.id);
           article.append(error);
+        }
+        if (review.persistenceWarning) {
+          const warning = document.createElement("div");
+          warning.className = "error";
+          warning.textContent = review.persistenceWarning;
+          article.append(warning);
         }
         root.append(article);
       }

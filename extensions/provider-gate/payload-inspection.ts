@@ -2,6 +2,13 @@ interface JsonRecord {
 	[key: string]: unknown;
 }
 
+export type ConversationKey = "input" | "messages" | "contents";
+
+export interface ConversationItems {
+	key: ConversationKey;
+	items: unknown[];
+}
+
 function isRecord(value: unknown): value is JsonRecord {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -29,12 +36,18 @@ export function isHumanUserItem(value: unknown): boolean {
 	return isRecord(value) && value.role === "user" && !containsToolData(value);
 }
 
+export function conversationItems(payload: unknown): ConversationItems | undefined {
+	if (!isRecord(payload)) return undefined;
+	if (Array.isArray(payload.input)) return { key: "input", items: payload.input };
+	if (Array.isArray(payload.messages)) return { key: "messages", items: payload.messages };
+	if (Array.isArray(payload.contents)) return { key: "contents", items: payload.contents };
+	return undefined;
+}
+
 function requestItems(payload: unknown): unknown[] | string | undefined {
 	if (!isRecord(payload)) return undefined;
-	if (typeof payload.input === "string" || Array.isArray(payload.input)) return payload.input;
-	if (Array.isArray(payload.messages)) return payload.messages;
-	if (Array.isArray(payload.contents)) return payload.contents;
-	return undefined;
+	if (typeof payload.input === "string") return payload.input;
+	return conversationItems(payload)?.items;
 }
 
 export function shouldGatePayload(payload: unknown): boolean {

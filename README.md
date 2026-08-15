@@ -102,9 +102,13 @@ La selección inicial sigue este orden:
 
 `provider-gate` intercepta cada payload mediante `before_provider_request` y pausa la llamada hasta recibir una decisión humana. Inicia una UI HTTP efímera en `127.0.0.1`, abre el navegador y muestra el JSON serializado completo junto con `COPY`, `EDIT`, `ACCEPT` y `REJECT`. La barra lateral colapsable permite saltar entre requests por su número de secuencia.
 
-La vista `USER` extrae el último elemento humano de `input` (con fallback para `messages` y `contents`) y permite alternar rápidamente con `PAYLOAD`. `DROP LAST TURN` conserva el prompt actual y elimina del draft únicamente la interacción completa inmediatamente anterior, incluidos sus eventos de tools asociados para no producir referencias huérfanas. Nada se envía hasta presionar `ACCEPT`.
+Cada tarjeta separa tres vistas: `RAW PI` contiene el payload reconstruido por Pi antes de aplicar políticas, `SENT` contiene el objeto que se libera al provider y `USER` extrae el último elemento humano de `input` con fallback para `messages` y `contents`.
 
-La compuerta se activa y desactiva durante la sesión con `/gate-on` y `/gate-off`. Al desactivarla, cualquier aprobación pendiente se libera sin modificaciones y las requests posteriores pasan directamente.
+Las ediciones dentro del array de conversación se guardan en un ledger de proyección. `DROP LAST TURN` conserva el prompt actual y prepara la eliminación de la interacción completa inmediatamente anterior, incluidos sus eventos de tools asociados para no producir referencias huérfanas. Las operaciones sólo se comprometen al presionar `ACCEPT`; `REJECT` descarta el draft completo. En N+1 el ledger reconoce los elementos originales y vuelve a aplicar reemplazos y eliminaciones antes de mostrar y enviar `SENT`.
+
+Los cambios fuera de `input`, `messages` o `contents`, como `temperature`, son propios de esa request y aparecen marcados como `REQUEST-ONLY`. Cambiar manualmente la longitud del array tampoco se persiste; para eliminar turnos debe utilizarse `DROP LAST TURN`.
+
+La compuerta se activa y desactiva durante la sesión con `/gate-on` y `/gate-off`. Al desactivarla, cualquier aprobación pendiente se libera y las requests posteriores pasan sin espera, pero el ledger continúa aplicándose para no reintroducir contexto eliminado.
 
 La URL incluye un token aleatorio por sesión y el servidor no escucha en interfaces externas. El payload puede contener prompts, mensajes, resultados de herramientas, imágenes codificadas y otros datos sensibles; no debe compartirse la URL.
 
@@ -117,9 +121,9 @@ pi --provider-gate-no-open
 
 `0`, el puerto predeterminado, selecciona un puerto libre. `/provider-gate` vuelve a abrir la interfaz. `EDIT` habilita un editor del payload completo; `ACCEPT` valida el texto como JSON y, si fue modificado, devuelve el objeto resultante para que Pi lo use como reemplazo. Un JSON inválido mantiene la llamada pausada. Al rechazar, la extensión llama `ctx.abort()` antes de devolver el control al provider. Al presionar Escape o cerrar la sesión, las revisiones pendientes se cancelan.
 
-Sólo se detienen payloads cuyo elemento final representa un mensaje humano. Las continuaciones cuyo último elemento es `function_call`, `function_call_output`, `tool_call` o `tool_result` pasan sin aprobación; el control específico de tools queda fuera de esta extensión.
+Sólo se detienen payloads cuyo elemento final representa un mensaje humano. Las continuaciones cuyo último elemento es `function_call`, `function_call_output`, `tool_call` o `tool_result` pasan sin aprobación, aunque reciben la proyección acumulada antes del envío; el control específico de tools queda fuera de esta extensión.
 
-El evento expone el payload del provider, no las credenciales ni necesariamente los headers HTTP. Las ediciones quedan reflejadas en el historial de la compuerta y modifican esa request del provider, pero no reescriben el mensaje persistido por Pi en la conversación. Esta primera versión conserva hasta doce requests en memoria durante la sesión y no escribe auditorías a disco.
+El ledger se persiste como una entrada custom de Pi que no participa en el contexto y se restaura al reabrir la misma rama. La sesión canónica permanece append-only: `RAW PI` puede seguir conteniendo el texto original, mientras que `SENT` refleja la conversación virtual efectiva. Un cambio de provider o una compactación que reserialice el contexto con otra estructura puede hacer que una identidad anterior deje de coincidir; `RAW PI` permite detectar esa situación. La UI conserva hasta doce requests en memoria y no escribe sus snapshots a disco.
 
 ## Provider wire debug
 
@@ -142,6 +146,6 @@ pi --wire-debug-show-secrets
 
 Los headers de autenticación, cookies, API keys y tokens se redactan por defecto. El body no se redacta y puede contener el contexto completo, imágenes y resultados de tools. `--wire-debug-show-secrets` debe utilizarse sólo en un entorno controlado y el archivo debe eliminarse después de la prueba.
 
-Para validar la persistencia, aceptar una llamada N después de editarla o ejecutar `DROP LAST TURN`, y comparar los registros `request` de N y N+1. El body de N muestra lo efectivamente entregado por Pi al proxy. Si N+1 vuelve a contener el mensaje original, confirma que el cambio fue request-local.
+Para validar la proyección, aceptar una llamada N después de editarla o ejecutar `DROP LAST TURN`, y comparar los registros `request` de N y N+1. El body de N+1 debe conservar el reemplazo y omitir los elementos eliminados, incluso cuando `RAW PI` todavía los contenga.
 
 El proxy captura tráfico HTTP/SSE. Para providers con múltiples transportes se debe configurar `transport: "sse"` durante la prueba. El proxy cambia el host de destino y Node puede recalcular headers de transporte como `host`, `content-length` o `accept-encoding`; el body y los headers de aplicación recibidos desde el SDK se conservan.

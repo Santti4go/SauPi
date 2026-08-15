@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { extractLatestUserMessage } from "./payload-inspection.ts";
+import {
+	mergeProjectedConversation,
+	ProjectionLedger,
+	type ProjectionResult,
+	type ProjectionSnapshot,
+} from "./projection-ledger.ts";
 
 export type ReviewDecision = "approved" | "rejected" | "cancelled";
 export type ReviewStatus = "pending" | ReviewDecision;
@@ -19,11 +25,16 @@ export interface ProviderReview {
 	id: string;
 	sequence: number;
 	createdAt: string;
-	payload: string;
+	rawPayload: string;
+	sentPayload: string;
 	userMessage: string | undefined;
-	bytes: number;
+	rawBytes: number;
+	sentBytes: number;
 	status: ReviewStatus;
 	modified: boolean;
+	appliedOperations: number;
+	requestOnlyChanges: boolean;
+	persistenceWarning: string | undefined;
 }
 
 export interface ReviewHandle {
@@ -36,6 +47,10 @@ type Listener = (review: ProviderReview) => void;
 interface PendingDecision {
 	resolve(resolution: ReviewResolution): void;
 	removeAbortListener(): void;
+	rawPayload: unknown;
+	draftPayload: unknown;
+	draftLedger: ProjectionLedger;
+	projection: ProjectionResult;
 }
 
 const HISTORY_LIMIT = 12;
@@ -64,17 +79,30 @@ export class ApprovalQueue {
 	private readonly listeners = new Set<Listener>();
 	private nextSequence = 1;
 
-	request(payload: unknown, signal?: AbortSignal): ReviewHandle {
-		const serialized = serializePayload(payload);
+	constructor(
+		private readonly ledger: ProjectionLedger,
+		private readonly onProjectionCommit?: (snapshot: ProjectionSnapshot) => void,
+	) {}
+
+	request(rawPayload: unknown, signal?: AbortSignal): ReviewHandle {
+		const draftLedger = this.ledger.clone();
+		const projection = draftLedger.project(rawPayload);
+		const rawSerialized = serializePayload(rawPayload);
+		const sentSerialized = serializePayload(projection.payload);
 		const review: ProviderReview = {
 			id: randomUUID(),
 			sequence: this.nextSequence++,
 			createdAt: new Date().toISOString(),
-			payload: serialized,
-			userMessage: extractLatestUserMessage(payload),
-			bytes: Buffer.byteLength(serialized),
+			rawPayload: rawSerialized,
+			sentPayload: sentSerialized,
+			userMessage: extractLatestUserMessage(projection.payload),
+			rawBytes: Buffer.byteLength(rawSerialized),
+			sentBytes: Buffer.byteLength(sentSerialized),
 			status: "pending",
-			modified: false,
+			modified: projection.changed,
+			appliedOperations: projection.appliedOperations,
+			requestOnlyChanges: false,
+			persistenceWarning: undefined,
 		};
 
 		let resolveDecision!: (resolution: ReviewResolution) => void;
@@ -90,6 +118,10 @@ export class ApprovalQueue {
 			this.pending.set(review.id, {
 				resolve: resolveDecision,
 				removeAbortListener: () => signal?.removeEventListener("abort", onAbort),
+				rawPayload,
+				draftPayload: projection.payload,
+				draftLedger,
+				projection,
 			});
 		}
 
@@ -100,25 +132,64 @@ export class ApprovalQueue {
 	}
 
 	approve(id: string, candidate: string): ApprovalAttempt {
-		const review = this.reviews.find((item) => item.id === id);
-		if (!review || review.status !== "pending" || !this.pending.has(id)) return { accepted: false };
-
-		if (candidate === review.payload) {
-			return { accepted: this.finish(id, { decision: "approved", modified: false }) };
-		}
+		const review = this.review(id);
+		const pending = this.pending.get(id);
+		if (!review || review.status !== "pending" || !pending) return { accepted: false };
 
 		let payload: unknown;
 		try {
-			payload = JSON.parse(candidate);
+			payload = candidate === review.sentPayload ? pending.draftPayload : JSON.parse(candidate);
 		} catch (error) {
 			return { accepted: false, error: error instanceof Error ? error.message : "Invalid JSON" };
 		}
 
-		review.payload = candidate;
-		review.bytes = Buffer.byteLength(candidate);
-		review.userMessage = extractLatestUserMessage(payload);
-		review.modified = true;
-		return { accepted: this.finish(id, { decision: "approved", modified: true, payload }) };
+		const attempt = pending.draftLedger.stageCandidate(pending.projection, payload);
+		const committed = this.ledger.mergeFrom(pending.draftLedger);
+		if (committed) this.onProjectionCommit?.(this.ledger.snapshot());
+		this.updateReview(review, pending.rawPayload, payload, {
+			appliedOperations: pending.draftLedger.project(pending.rawPayload).appliedOperations,
+			requestOnlyChanges: attempt.requestOnlyChanges,
+			persistenceWarning: attempt.warning,
+		});
+		return {
+			accepted: this.finish(id, {
+				decision: "approved",
+				modified: review.modified,
+				...(review.modified ? { payload } : {}),
+			}),
+		};
+	}
+
+	dropLastTurn(id: string, candidate: string): ApprovalAttempt {
+		const review = this.review(id);
+		const pending = this.pending.get(id);
+		if (!review || review.status !== "pending" || !pending) return { accepted: false };
+
+		let payload: unknown;
+		try {
+			payload = candidate === review.sentPayload ? pending.draftPayload : JSON.parse(candidate);
+		} catch (error) {
+			return { accepted: false, error: error instanceof Error ? error.message : "Invalid JSON" };
+		}
+
+		const staged = pending.draftLedger.stageCandidate(pending.projection, payload);
+		if (staged.warning) return { accepted: false, error: staged.warning };
+		try {
+			const beforeDrop = pending.draftLedger.project(pending.rawPayload);
+			pending.draftLedger.dropLastCompletedTurn(beforeDrop);
+			const afterDrop = pending.draftLedger.project(pending.rawPayload);
+			pending.projection = afterDrop;
+			pending.draftPayload = mergeProjectedConversation(payload, afterDrop);
+			this.updateReview(review, pending.rawPayload, pending.draftPayload, {
+				appliedOperations: afterDrop.appliedOperations,
+				requestOnlyChanges: staged.requestOnlyChanges,
+				persistenceWarning: undefined,
+			});
+			this.emit(review);
+			return { accepted: true };
+		} catch (error) {
+			return { accepted: false, error: error instanceof Error ? error.message : String(error) };
+		}
 	}
 
 	reject(id: string): boolean {
@@ -128,7 +199,7 @@ export class ApprovalQueue {
 	approveAll(): number {
 		let approved = 0;
 		for (const review of this.reviews) {
-			if (review.status === "pending" && this.approve(review.id, review.payload).accepted) approved++;
+			if (review.status === "pending" && this.approve(review.id, review.sentPayload).accepted) approved++;
 		}
 		return approved;
 	}
@@ -147,9 +218,32 @@ export class ApprovalQueue {
 		this.listeners.clear();
 	}
 
+	private review(id: string): ProviderReview | undefined {
+		return this.reviews.find((candidate) => candidate.id === id);
+	}
+
+	private updateReview(
+		review: ProviderReview,
+		rawPayload: unknown,
+		sentPayload: unknown,
+		options: Pick<ProviderReview, "appliedOperations" | "requestOnlyChanges" | "persistenceWarning">,
+	): void {
+		const rawSerialized = serializePayload(rawPayload);
+		const sentSerialized = serializePayload(sentPayload);
+		review.rawPayload = rawSerialized;
+		review.sentPayload = sentSerialized;
+		review.userMessage = extractLatestUserMessage(sentPayload);
+		review.rawBytes = Buffer.byteLength(rawSerialized);
+		review.sentBytes = Buffer.byteLength(sentSerialized);
+		review.modified = rawSerialized !== sentSerialized;
+		review.appliedOperations = options.appliedOperations;
+		review.requestOnlyChanges = options.requestOnlyChanges;
+		review.persistenceWarning = options.persistenceWarning;
+	}
+
 	private finish(id: string, resolution: ReviewResolution): boolean {
 		const pending = this.pending.get(id);
-		const review = this.reviews.find((candidate) => candidate.id === id);
+		const review = this.review(id);
 		if (!pending || !review || review.status !== "pending") return false;
 
 		this.pending.delete(id);

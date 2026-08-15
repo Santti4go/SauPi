@@ -1,7 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { ApprovalQueue } from "./approval-queue.ts";
 import { shouldGatePayload } from "./payload-inspection.ts";
+import { ProjectionLedger, type ProjectionSnapshot } from "./projection-ledger.ts";
 import { openBrowser, ProviderGateServer } from "./server.ts";
+
+const PROJECTION_ENTRY = "provider-gate-projection";
 
 function validPort(value: boolean | string | undefined): number {
 	const port = typeof value === "string" ? Number(value) : 0;
@@ -12,7 +15,11 @@ function validPort(value: boolean | string | undefined): number {
 }
 
 export default function providerGate(pi: ExtensionAPI): void {
-	const queue = new ApprovalQueue();
+	const ledger = new ProjectionLedger();
+	const queue = new ApprovalQueue(ledger, (snapshot) => {
+		// Pi persiste el ledger sin incorporarlo al contexto del modelo.
+		pi.appendEntry(PROJECTION_ENTRY, snapshot);
+	});
 	let server: ProviderGateServer | undefined;
 	let url: string | undefined;
 	let startupError: string | undefined;
@@ -34,6 +41,10 @@ export default function providerGate(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		try {
+			const saved = [...ctx.sessionManager.getBranch()]
+				.reverse()
+				.find((entry) => entry.type === "custom" && entry.customType === PROJECTION_ENTRY);
+			if (saved?.type === "custom" && isProjectionSnapshot(saved.data)) ledger.restore(saved.data);
 			server = new ProviderGateServer(queue, validPort(pi.getFlag("provider-gate-port")));
 			url = await server.start();
 			startupError = undefined;
@@ -50,7 +61,8 @@ export default function providerGate(pi: ExtensionAPI): void {
 
 	// Pi espera este handler antes de entregar el payload serializado al provider.
 	pi.on("before_provider_request", async (event, ctx) => {
-		if (!enabled || !shouldGatePayload(event.payload)) return undefined;
+		const projection = ledger.project(event.payload);
+		if (!enabled || !shouldGatePayload(projection.payload)) return projection.changed ? projection.payload : undefined;
 		if (!server || !url || startupError) {
 			ctx.abort();
 			if (ctx.hasUI) ctx.ui.notify(`Provider request rejected: ${startupError ?? "gate is unavailable"}`, "error");
@@ -117,4 +129,10 @@ export default function providerGate(pi: ExtensionAPI): void {
 		url = undefined;
 		if (ctx.hasUI) ctx.ui.setStatus("provider-gate", undefined);
 	});
+}
+
+function isProjectionSnapshot(value: unknown): value is ProjectionSnapshot {
+	if (!value || typeof value !== "object") return false;
+	const candidate = value as Partial<ProjectionSnapshot>;
+	return Array.isArray(candidate.dropped) && Array.isArray(candidate.replacements);
 }

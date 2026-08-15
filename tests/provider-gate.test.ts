@@ -4,6 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { ApprovalQueue, serializePayload } from "../extensions/provider-gate/approval-queue.ts";
 import providerGateExtension from "../extensions/provider-gate/index.ts";
 import { extractLatestUserMessage, shouldGatePayload } from "../extensions/provider-gate/payload-inspection.ts";
+import { ProjectionLedger } from "../extensions/provider-gate/projection-ledger.ts";
 import { ProviderGateServer } from "../extensions/provider-gate/server.ts";
 
 test("serializes complete payloads without failing on cycles or bigint", () => {
@@ -16,7 +17,7 @@ test("serializes complete payloads without failing on cycles or bigint", () => {
 });
 
 test("an approval stays pending until an explicit decision", async () => {
-	const queue = new ApprovalQueue();
+	const queue = new ApprovalQueue(new ProjectionLedger());
 	const handle = queue.request({ messages: [{ role: "user", content: "private" }] });
 	let settled = false;
 	void handle.decision.then(() => {
@@ -26,12 +27,13 @@ test("an approval stays pending until an explicit decision", async () => {
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.equal(settled, false);
 	assert.equal(queue.snapshot()[0]?.status, "pending");
-	assert.deepEqual(queue.approve(handle.review.id, handle.review.payload), { accepted: true });
+	assert.deepEqual(queue.approve(handle.review.id, handle.review.sentPayload), { accepted: true });
 	assert.deepEqual(await handle.decision, { decision: "approved", modified: false });
 });
 
 test("an edited approval resolves with a parsed replacement payload", async () => {
-	const queue = new ApprovalQueue();
+	const ledger = new ProjectionLedger();
+	const queue = new ApprovalQueue(ledger);
 	const handle = queue.request({ temperature: 1, messages: [] });
 	const edited = JSON.stringify({ temperature: 0, messages: [{ role: "user", content: "reviewed" }] }, null, 2);
 
@@ -43,6 +45,63 @@ test("an edited approval resolves with a parsed replacement payload", async () =
 	});
 	assert.equal(queue.snapshot()[0]?.modified, true);
 	assert.equal(queue.snapshot()[0]?.userMessage, "reviewed");
+	const next = ledger.project({
+		messages: [
+			{ role: "user", content: "reviewed" },
+			{ role: "assistant", content: "done" },
+			{ role: "user", content: "next" },
+		],
+	});
+	assert.equal(next.changed, false);
+});
+
+test("message replacements and dropped turns are projected into N+1", async () => {
+	const ledger = new ProjectionLedger();
+	const queue = new ApprovalQueue(ledger);
+	const firstUser = { role: "user", content: "original" };
+	const firstAssistant = { role: "assistant", content: "answer" };
+	const currentUser = { role: "user", content: "current" };
+	const handle = queue.request({ input: [firstUser, firstAssistant, currentUser] });
+	const edited = JSON.parse(handle.review.sentPayload) as { input: Array<Record<string, unknown>> };
+	edited.input[2]!.content = "edited current";
+	assert.equal(queue.dropLastTurn(handle.review.id, JSON.stringify(edited)).accepted, true);
+	assert.equal(queue.approve(handle.review.id, queue.snapshot()[0]!.sentPayload).accepted, true);
+	await handle.decision;
+
+	const next = ledger.project({
+		input: [
+			firstUser,
+			firstAssistant,
+			currentUser,
+			{ role: "assistant", content: "new answer" },
+			{ role: "user", content: "N+1" },
+		],
+	});
+	assert.deepEqual((next.payload as { input: unknown[] }).input, [
+		{ role: "user", content: "edited current" },
+		{ role: "assistant", content: "new answer" },
+		{ role: "user", content: "N+1" },
+	]);
+	assert.equal(next.appliedOperations, 3);
+	const restored = new ProjectionLedger();
+	restored.restore(ledger.snapshot());
+	assert.deepEqual(restored.project(next.rawPayload).payload, next.payload);
+});
+
+test("rejected projection drafts do not affect later requests", async () => {
+	const ledger = new ProjectionLedger();
+	const queue = new ApprovalQueue(ledger);
+	const handle = queue.request({
+		input: [
+			{ role: "user", content: "old" },
+			{ role: "assistant", content: "old answer" },
+			{ role: "user", content: "current" },
+		],
+	});
+	assert.equal(queue.dropLastTurn(handle.review.id, handle.review.sentPayload).accepted, true);
+	assert.equal(queue.reject(handle.review.id), true);
+	assert.deepEqual(await handle.decision, { decision: "rejected", modified: false });
+	assert.equal(ledger.operationCount, 0);
 });
 
 test("only provider payloads ending in a human user input require approval", () => {
@@ -65,7 +124,7 @@ test("only provider payloads ending in a human user input require approval", () 
 });
 
 test("the loopback server requires its token and accepts browser decisions", async () => {
-	const queue = new ApprovalQueue();
+	const queue = new ApprovalQueue(new ProjectionLedger());
 	const server = new ProviderGateServer(queue, 0);
 	const url = await server.start();
 
@@ -82,15 +141,17 @@ test("the loopback server requires its token and accepts browser decisions", asy
 		assert.match(html, /EDIT/);
 		assert.match(html, /USER/);
 		assert.match(html, /DROP LAST TURN/);
+		assert.match(html, /RAW PI/);
+		assert.match(html, /SENT/);
 		assert.match(html, /HISTORY/);
 		assert.match(html, /EventSource/);
 
 		const handle = queue.request({ tools: [{ name: "read" }] });
 		const stateUrl = new URL("/state", url);
 		stateUrl.search = new URL(url).search;
-		const state = (await (await fetch(stateUrl)).json()) as Array<{ id: string; payload: string }>;
+		const state = (await (await fetch(stateUrl)).json()) as Array<{ id: string; sentPayload: string }>;
 		assert.equal(state[0]?.id, handle.review.id);
-		assert.match(state[0]?.payload ?? "", /"tools"/);
+		assert.match(state[0]?.sentPayload ?? "", /"tools"/);
 
 		const approveUrl = new URL(`/requests/${handle.review.id}/approve`, url);
 		approveUrl.search = new URL(url).search;
@@ -105,11 +166,28 @@ test("the loopback server requires its token and accepts browser decisions", asy
 			payload: { tools: [], temperature: 0 },
 		});
 		const updated = (await (await fetch(stateUrl)).json()) as Array<{
-			payload: string;
+			sentPayload: string;
 			modified: boolean;
 		}>;
-		assert.equal(updated[0]?.payload, edited);
+		assert.equal(updated[0]?.sentPayload, edited);
 		assert.equal(updated[0]?.modified, true);
+
+		const dropHandle = queue.request({
+			input: [
+				{ role: "user", content: "old" },
+				{ role: "assistant", content: "old answer" },
+				{ role: "user", content: "current" },
+			],
+		});
+		const dropUrl = new URL(`/requests/${dropHandle.review.id}/drop-last-turn`, url);
+		dropUrl.search = new URL(url).search;
+		assert.equal((await fetch(dropUrl, { method: "POST", body: dropHandle.review.sentPayload })).status, 200);
+		const droppedState = (await (await fetch(stateUrl)).json()) as Array<{ id: string; sentPayload: string }>;
+		assert.doesNotMatch(droppedState.find((item) => item.id === dropHandle.review.id)!.sentPayload, /old answer/);
+		const dropRejectUrl = new URL(`/requests/${dropHandle.review.id}/reject`, url);
+		dropRejectUrl.search = new URL(url).search;
+		await fetch(dropRejectUrl, { method: "POST" });
+		await dropHandle.decision;
 	} finally {
 		queue.close();
 		await server.stop();
@@ -121,6 +199,7 @@ test("the Pi hook replaces edited approvals and aborts rejected requests", async
 	const commands = new Map<string, (...args: unknown[]) => unknown>();
 	const flags = new Map<string, boolean | string | undefined>();
 	const notifications: string[] = [];
+	const customEntries: Array<{ type: "custom"; customType: string; data: unknown }> = [];
 	const pi = {
 		registerFlag(name: string, options: { default?: boolean | string }) {
 			flags.set(name, name === "provider-gate-no-open" ? true : options.default);
@@ -130,6 +209,9 @@ test("the Pi hook replaces edited approvals and aborts rejected requests", async
 		},
 		registerCommand(name: string, options: { handler: (...args: unknown[]) => unknown }) {
 			commands.set(name, options.handler);
+		},
+		appendEntry(customType: string, data: unknown) {
+			customEntries.push({ type: "custom", customType, data });
 		},
 		on(name: string, handler: (...args: unknown[]) => unknown) {
 			handlers.set(name, handler);
@@ -148,6 +230,11 @@ test("the Pi hook replaces edited approvals and aborts rejected requests", async
 			setStatus() {},
 			notify(text: string) {
 				notifications.push(text);
+			},
+		},
+		sessionManager: {
+			getBranch() {
+				return customEntries;
 			},
 		},
 	} as unknown as ExtensionContext;
@@ -186,10 +273,73 @@ test("the Pi hook replaces edited approvals and aborts rejected requests", async
 	approveUrl.search = new URL(browserUrl).search;
 	await fetch(approveUrl, {
 		method: "POST",
-		body: JSON.stringify({ messages: ["reviewed"], temperature: 0 }),
+		body: JSON.stringify({ input: [{ role: "user", content: "reviewed" }], temperature: 0 }),
 	});
-	assert.deepEqual(await editedPending, { messages: ["reviewed"], temperature: 0 });
+	assert.deepEqual(await editedPending, { input: [{ role: "user", content: "reviewed" }], temperature: 0 });
 	assert.equal(abortCount, 0);
+	assert.equal(customEntries.length, 1);
+
+	const toolContinuation = await beforeRequest(
+		{ payload: { input: [{ role: "user", content: "secret" }, { type: "function_call", id: "call-1" }] } },
+		ctx,
+	);
+	assert.deepEqual(toolContinuation, {
+		input: [{ role: "user", content: "reviewed" }, { type: "function_call", id: "call-1" }],
+	});
+
+	await gateOff("", ctx);
+	const bypassedProjection = await beforeRequest(
+		{
+			payload: {
+				input: [
+					{ role: "user", content: "secret" },
+					{ role: "assistant", content: "answer" },
+					{ role: "user", content: "next" },
+				],
+			},
+		},
+		ctx,
+	);
+	assert.deepEqual(bypassedProjection, {
+		input: [
+			{ role: "user", content: "reviewed" },
+			{ role: "assistant", content: "answer" },
+			{ role: "user", content: "next" },
+		],
+	});
+	await gateOn("", ctx);
+
+	const projectedPending = beforeRequest(
+		{
+			payload: {
+				input: [
+					{ role: "user", content: "secret" },
+					{ role: "assistant", content: "answer" },
+					{ role: "user", content: "N+1" },
+				],
+			},
+		},
+		ctx,
+	);
+	await new Promise((resolve) => setImmediate(resolve));
+	const projectedReviews = (await (await fetch(stateUrl)).json()) as Array<{
+		id: string;
+		rawPayload: string;
+		sentPayload: string;
+	}>;
+	assert.match(projectedReviews[0]!.rawPayload, /secret/);
+	assert.match(projectedReviews[0]!.sentPayload, /reviewed/);
+	assert.doesNotMatch(projectedReviews[0]!.sentPayload, /secret/);
+	const projectedApproveUrl = new URL(`/requests/${projectedReviews[0]!.id}/approve`, browserUrl);
+	projectedApproveUrl.search = new URL(browserUrl).search;
+	await fetch(projectedApproveUrl, { method: "POST", body: projectedReviews[0]!.sentPayload });
+	assert.deepEqual(await projectedPending, {
+		input: [
+			{ role: "user", content: "reviewed" },
+			{ role: "assistant", content: "answer" },
+			{ role: "user", content: "N+1" },
+		],
+	});
 
 	const rejectedPending = beforeRequest({ payload: { input: [{ role: "user", content: "reject me" }] } }, ctx);
 	await new Promise((resolve) => setImmediate(resolve));

@@ -91,7 +91,7 @@ export class ProviderGateServer {
 				return;
 			}
 
-			const decision = url.pathname.match(/^\/requests\/([^/]+)\/(approve|reject)$/);
+			const decision = url.pathname.match(/^\/requests\/([^/]+)\/(approve|reject|drop-last-turn)$/);
 			if (request.method === "POST" && decision) {
 				const id = decodeURIComponent(decision[1]!);
 				if (decision[2] === "reject") {
@@ -101,9 +101,10 @@ export class ProviderGateServer {
 				}
 
 				try {
-					const attempt = this.queue.approve(id, await readBody(request));
+					const body = await readBody(request);
+					const attempt = decision[2] === "drop-last-turn" ? this.queue.dropLastTurn(id, body) : this.queue.approve(id, body);
 					if (attempt.error) {
-						send(response, 400, `Invalid JSON: ${attempt.error}`);
+						send(response, 400, attempt.error);
 						return;
 					}
 					send(response, attempt.accepted ? 200 : 409, attempt.accepted ? "OK" : "Request is no longer pending");
