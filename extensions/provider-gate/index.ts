@@ -1,8 +1,9 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ApprovalQueue } from "./approval-queue.ts";
 import { shouldGatePayload } from "./payload-inspection.ts";
 import { ProjectionLedger, type ProjectionSnapshot } from "./projection-ledger.ts";
 import { openBrowser, ProviderGateServer } from "./server.ts";
+import { collectProviderGateMetrics } from "./telemetry.ts";
 
 const PROJECTION_ENTRY = "provider-gate-projection";
 
@@ -26,6 +27,9 @@ export default function providerGate(pi: ExtensionAPI): void {
 	let enabled = true;
 
 	const statusText = () => (enabled ? "provider gate: armed" : "provider gate: bypass");
+	const updateMetrics = (ctx: ExtensionContext) => {
+		server?.updateMetrics(collectProviderGateMetrics(ctx));
+	};
 
 	// Pi registra estas opciones como flags propias de la extensión.
 	pi.registerFlag("provider-gate-port", {
@@ -46,6 +50,7 @@ export default function providerGate(pi: ExtensionAPI): void {
 				.find((entry) => entry.type === "custom" && entry.customType === PROJECTION_ENTRY);
 			if (saved?.type === "custom" && isProjectionSnapshot(saved.data)) ledger.restore(saved.data);
 			server = new ProviderGateServer(queue, validPort(pi.getFlag("provider-gate-port")));
+			updateMetrics(ctx);
 			url = await server.start();
 			startupError = undefined;
 			if (!pi.getFlag("provider-gate-no-open")) openBrowser(url);
@@ -61,6 +66,7 @@ export default function providerGate(pi: ExtensionAPI): void {
 
 	// Pi espera este handler antes de entregar el payload serializado al provider.
 	pi.on("before_provider_request", async (event, ctx) => {
+		updateMetrics(ctx);
 		const projection = ledger.project(event.payload);
 		if (!enabled || !shouldGatePayload(projection.payload)) return projection.changed ? projection.payload : undefined;
 		if (!server || !url || startupError) {
@@ -88,6 +94,11 @@ export default function providerGate(pi: ExtensionAPI): void {
 		}
 		return undefined;
 	});
+
+	pi.on("turn_end", (_event, ctx) => updateMetrics(ctx));
+	pi.on("session_compact", (_event, ctx) => updateMetrics(ctx));
+	pi.on("session_tree", (_event, ctx) => updateMetrics(ctx));
+	pi.on("model_select", (_event, ctx) => updateMetrics(ctx));
 
 	// El comando de Pi vuelve a abrir la URL efímera de esta sesión.
 	pi.registerCommand("provider-gate", {

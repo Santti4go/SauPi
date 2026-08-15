@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { ApprovalQueue, type ProviderReview } from "./approval-queue.ts";
+import type { ProviderGateMetrics } from "./telemetry.ts";
 import { PROVIDER_GATE_HTML } from "./web-ui.ts";
 
 const LOOPBACK = "127.0.0.1";
@@ -48,6 +49,7 @@ export class ProviderGateServer {
 	private unsubscribe: (() => void) | undefined;
 	private heartbeat: ReturnType<typeof setInterval> | undefined;
 	private publicUrl: string | undefined;
+	private metrics: ProviderGateMetrics | undefined;
 
 	constructor(
 		private readonly queue: ApprovalQueue,
@@ -82,12 +84,18 @@ export class ProviderGateServer {
 				});
 				this.clients.add(response);
 				sse(response, "snapshot", this.queue.snapshot());
+				if (this.metrics) sse(response, "metrics", this.metrics);
 				request.on("close", () => this.clients.delete(response));
 				return;
 			}
 
 			if (request.method === "GET" && url.pathname === "/state") {
 				send(response, 200, JSON.stringify(this.queue.snapshot()), "application/json; charset=utf-8");
+				return;
+			}
+
+			if (request.method === "GET" && url.pathname === "/metrics") {
+				send(response, 200, JSON.stringify(this.metrics ?? null), "application/json; charset=utf-8");
 				return;
 			}
 
@@ -133,6 +141,11 @@ export class ProviderGateServer {
 		}, 15_000);
 		this.heartbeat.unref?.();
 		return this.publicUrl;
+	}
+
+	updateMetrics(metrics: ProviderGateMetrics): void {
+		this.metrics = metrics;
+		for (const client of this.clients) sse(client, "metrics", metrics);
 	}
 
 	async stop(): Promise<void> {

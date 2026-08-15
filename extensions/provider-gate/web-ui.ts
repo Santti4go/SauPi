@@ -18,11 +18,22 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
     nav button { width: 100%; padding: 6px 4px; text-align: left; white-space: nowrap; }
     aside.collapsed nav button { text-align: center; }
     #content { flex: 1; min-width: 0; }
-    header { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; gap: 16px; padding: 14px 18px; border-bottom: 1px solid #34513b; background: #0b100c; }
+    #topbar { position: sticky; top: 0; z-index: 2; background: #0b100c; box-shadow: 0 5px 18px #0008; }
+    #metrics-bar { display: flex; flex-wrap: wrap; align-items: stretch; gap: 1px; min-height: 54px; border-bottom: 1px solid #29432f; background: #18241b; }
+    .metric { position: relative; min-width: 120px; flex: 1 1 auto; padding: 8px 12px; background: #0a0f0b; overflow: hidden; }
+    .metric.context { min-width: 210px; flex-grow: 1.6; }
+    .metric-label { display: block; margin-bottom: 3px; color: #617a67; font-size: 9px; letter-spacing: .12em; }
+    .metric-value { position: relative; z-index: 1; color: #b7c9ba; font-size: 12px; white-space: nowrap; }
+    .metric.context .metric-value { color: #72ff94; }
+    .context-track { position: absolute; inset: auto 0 0; height: 3px; background: #17231a; }
+    .context-fill { display: block; height: 100%; max-width: 100%; background: #72ff94; transition: width .2s; }
+    .context-fill.warning { background: #e4c95d; }
+    .context-fill.danger { background: #ff7087; }
+    header { display: flex; justify-content: space-between; gap: 16px; padding: 11px 18px; border-bottom: 1px solid #34513b; background: #0b100c; }
     h1 { margin: 0; font-size: 15px; color: #72ff94; }
     #connection { color: #78917d; font-size: 12px; }
     main { padding: 16px; display: grid; gap: 14px; }
-    article { scroll-margin-top: 62px; border: 1px solid #29432f; background: #0b100c; }
+    article { scroll-margin-top: 126px; border: 1px solid #29432f; background: #0b100c; }
     article.pending { border-color: #72ff94; }
     article.approved { border-color: #376e45; opacity: .82; }
     article.rejected { border-color: #a24455; opacity: .82; }
@@ -45,7 +56,7 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
     textarea { display: block; min-height: 58vh; resize: vertical; outline: 1px solid #72ff94; outline-offset: -1px; white-space: pre; }
     .error { padding: 9px 12px; border-top: 1px solid #a24455; color: #ff9cab; font-size: 12px; }
     #empty { color: #78917d; padding: 30px; text-align: center; }
-    @media (max-width: 680px) { aside { flex-basis: 42px; width: 42px; } .side-title, .nav-label { display: none; } h1 { font-size: 12px; } }
+    @media (max-width: 680px) { aside { flex-basis: 42px; width: 42px; } .side-title, .nav-label { display: none; } h1 { font-size: 12px; } .metric { min-width: 105px; } .metric.context { min-width: 100%; } }
   </style>
 </head>
 <body>
@@ -54,7 +65,10 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
     <nav id="history"></nav>
   </aside>
   <div id="content">
-    <header><h1>PI // PROVIDER AUTHORIZATION GATE</h1><span id="connection">connecting</span></header>
+    <div id="topbar">
+      <section id="metrics-bar" aria-label="Pi session metrics"><div class="metric"><span class="metric-label">TELEMETRY</span><span class="metric-value">waiting for Pi…</span></div></section>
+      <header><h1>PI // PROVIDER AUTHORIZATION GATE</h1><span id="connection">connecting</span></header>
+    </div>
     <main id="reviews"><div id="empty">Waiting for a provider payload…</div></main>
   </div>
   <script>
@@ -69,9 +83,59 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
     const sidebar = document.querySelector("#sidebar");
     const toggleSidebar = document.querySelector("#toggle-sidebar");
     const connection = document.querySelector("#connection");
+    const metricsBar = document.querySelector("#metrics-bar");
 
     function formatBytes(bytes) {
       return bytes < 1024 ? bytes + " B" : (bytes / 1024).toFixed(1) + " KiB";
+    }
+
+    function formatTokens(value) {
+      if (value === null || value === undefined) return "?";
+      if (value >= 1000000) return (value / 1000000).toFixed(value >= 10000000 ? 1 : 2) + "M";
+      if (value >= 1000) return (value / 1000).toFixed(value >= 100000 ? 0 : 1) + "K";
+      return String(value);
+    }
+
+    function metric(label, value, title, className) {
+      const item = document.createElement("div");
+      item.className = "metric" + (className ? " " + className : "");
+      item.title = title;
+      const name = document.createElement("span");
+      name.className = "metric-label";
+      name.textContent = label;
+      const output = document.createElement("span");
+      output.className = "metric-value";
+      output.textContent = value;
+      item.append(name, output);
+      return item;
+    }
+
+    function renderMetrics(metrics) {
+      metricsBar.replaceChildren();
+      const context = metrics.context;
+      const contextValue = context
+        ? formatTokens(context.tokens) + " / " + formatTokens(context.contextWindow) + (context.percent === null ? " (?)" : " (" + context.percent.toFixed(1) + "%)")
+        : "not available";
+      const contextMetric = metric("PI CONTEXT", contextValue, "Pi context estimate before provider-gate payload rewrites", "context");
+      if (context) {
+        const track = document.createElement("span");
+        track.className = "context-track";
+        const fill = document.createElement("span");
+        const percent = context.percent ?? 0;
+        fill.className = "context-fill" + (percent > 90 ? " danger" : percent > 70 ? " warning" : "");
+        fill.style.width = Math.max(0, Math.min(100, percent)) + "%";
+        track.append(fill);
+        contextMetric.append(track);
+      }
+      const tokenTitle = "Input " + metrics.tokens.input.toLocaleString() + ", output " + metrics.tokens.output.toLocaleString() + ", cache read " + metrics.tokens.cacheRead.toLocaleString() + ", cache write " + metrics.tokens.cacheWrite.toLocaleString();
+      const tokenMetric = metric("SESSION TOKENS", formatTokens(metrics.tokens.total), tokenTitle);
+      const ioMetric = metric("IN / OUT", formatTokens(metrics.tokens.input) + " / " + formatTokens(metrics.tokens.output), tokenTitle);
+      const cacheMetric = metric("CACHE R / W", formatTokens(metrics.tokens.cacheRead) + " / " + formatTokens(metrics.tokens.cacheWrite), tokenTitle);
+      const costValue = metrics.billing === "subscription" ? "subscription" : metrics.cost === null ? "not available" : "$" + metrics.cost.toFixed(4);
+      const costMetric = metric("COST", costValue, metrics.billing === "subscription" ? "Provider authenticated through an OAuth subscription" : "Accumulated cost reported by Pi");
+      const modelValue = metrics.model ? metrics.model.provider + "/" + metrics.model.id : "not available";
+      const modelMetric = metric("MODEL", modelValue, modelValue);
+      metricsBar.append(contextMetric, tokenMetric, ioMetric, cacheMetric, costMetric, modelMetric);
     }
 
     function currentText(review) {
@@ -349,6 +413,7 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
       render();
     });
     events.addEventListener("review", event => update(JSON.parse(event.data)));
+    events.addEventListener("metrics", event => renderMetrics(JSON.parse(event.data)));
     events.onopen = () => { connection.textContent = "connected"; };
     events.onerror = () => { connection.textContent = "disconnected — retrying"; };
   </script>
