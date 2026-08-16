@@ -1,0 +1,41 @@
+version: 1
+projectName: my-project
+
+orchestrator:
+  themeProfile: orchestrator
+  uiTheme: orchestrator-grid
+
+defaults:
+  lifecycle: persistent
+  workspace: shared
+  start: lazy
+
+agents:
+  - name: developer
+    description: Implementation, refactoring, and automated tests
+    model: gpt-5.5
+    count: 2
+    prompt: .pi/agents/developer.md
+    themeProfile: developer
+    workspace: worktree
+    tools: read, grep, find, ls, bash, edit, write
+
+  - name: marketing
+    description: Product positioning, copy, and communication
+    count: 1
+    prompt: .pi/agents/marketing.md
+    themeProfile: marketing
+    tools: read, grep, find, ls
+
+  - name: scout
+    description: Fast, read-only research with a fresh context
+    count: 3
+    prompt: .pi/agents/scout.md
+    lifecycle: ephemeral
+    tools: read, grep, find, ls
+
+runtime:
+  directory: .pi/orchestrator
+
+# tmux:
+#   session: pi-my-project

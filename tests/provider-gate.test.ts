@@ -6,6 +6,7 @@ import providerGateExtension from "../extensions/provider-gate/index.ts";
 import { extractLatestUserMessage, shouldGatePayload } from "../extensions/provider-gate/payload-inspection.ts";
 import { ProjectionLedger } from "../extensions/provider-gate/projection-ledger.ts";
 import { ProviderGateServer } from "../extensions/provider-gate/server.ts";
+import { collectProviderGateMetrics } from "../extensions/provider-gate/telemetry.ts";
 
 test("serializes complete payloads without failing on cycles or bigint", () => {
 	const payload: { count: bigint; self?: unknown } = { count: 12n };
@@ -29,6 +30,17 @@ test("an approval stays pending until an explicit decision", async () => {
 	assert.equal(queue.snapshot()[0]?.status, "pending");
 	assert.deepEqual(queue.approve(handle.review.id, handle.review.sentPayload), { accepted: true });
 	assert.deepEqual(await handle.decision, { decision: "approved", modified: false });
+});
+
+test("a bypassed request is audited without creating a pending decision", () => {
+	const ledger = new ProjectionLedger();
+	const queue = new ApprovalQueue(ledger);
+	const review = queue.observe(ledger.project({ input: [{ role: "user", content: "inspect later" }] }));
+
+	assert.equal(review.status, "bypassed");
+	assert.equal(review.userMessage, "inspect later");
+	assert.equal(queue.snapshot()[0]?.id, review.id);
+	assert.equal(queue.approve(review.id, review.sentPayload).accepted, false);
 });
 
 test("an edited approval resolves with a parsed replacement payload", async () => {
@@ -123,9 +135,60 @@ test("only provider payloads ending in a human user input require approval", () 
 	);
 });
 
+test("collects current branch token, context, model, and cost telemetry", () => {
+	const ctx = {
+		sessionManager: {
+			getBranch: () => [
+				{
+					type: "message",
+					message: {
+						role: "assistant",
+						usage: {
+							input: 1_000,
+							output: 200,
+							cacheRead: 500,
+							cacheWrite: 100,
+							cost: { total: 0.012 },
+						},
+					},
+				},
+			],
+		},
+		model: {
+			provider: "test-provider",
+			id: "test-model",
+			contextWindow: 128_000,
+			cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 1 },
+		},
+		modelRegistry: { isUsingOAuth: () => false },
+		getContextUsage: () => ({ tokens: 32_000, contextWindow: 128_000, percent: 25 }),
+	} as unknown as ExtensionContext;
+
+	const metrics = collectProviderGateMetrics(ctx);
+	assert.deepEqual(metrics.model, { provider: "test-provider", id: "test-model" });
+	assert.deepEqual(metrics.tokens, {
+		input: 1_000,
+		output: 200,
+		cacheRead: 500,
+		cacheWrite: 100,
+		total: 1_800,
+	});
+	assert.equal(metrics.cost, 0.012);
+	assert.equal(metrics.billing, "metered");
+	assert.deepEqual(metrics.context, { tokens: 32_000, contextWindow: 128_000, percent: 25 });
+});
+
 test("the loopback server requires its token and accepts browser decisions", async () => {
 	const queue = new ApprovalQueue(new ProjectionLedger());
 	const server = new ProviderGateServer(queue, 0);
+	server.updateMetrics({
+		updatedAt: new Date(0).toISOString(),
+		model: { provider: "test-provider", id: "test-model" },
+		tokens: { input: 1_000, output: 200, cacheRead: 500, cacheWrite: 100, total: 1_800 },
+		cost: 0.012,
+		billing: "metered",
+		context: { tokens: 32_000, contextWindow: 128_000, percent: 25 },
+	});
 	const url = await server.start();
 
 	try {
@@ -144,7 +207,16 @@ test("the loopback server requires its token and accepts browser decisions", asy
 		assert.match(html, /RAW PI/);
 		assert.match(html, /SENT/);
 		assert.match(html, /HISTORY/);
+		assert.match(html, /PI CONTEXT/);
+		assert.match(html, /SESSION TOKENS/);
+		assert.match(html, /COST/);
 		assert.match(html, /EventSource/);
+
+		const metricsUrl = new URL("/metrics", url);
+		metricsUrl.search = new URL(url).search;
+		const metrics = (await (await fetch(metricsUrl)).json()) as { tokens: { total: number }; context: { percent: number } };
+		assert.equal(metrics.tokens.total, 1_800);
+		assert.equal(metrics.context.percent, 25);
 
 		const handle = queue.request({ tools: [{ name: "read" }] });
 		const stateUrl = new URL("/state", url);
@@ -237,6 +309,14 @@ test("the Pi hook replaces edited approvals and aborts rejected requests", async
 				return customEntries;
 			},
 		},
+		model: {
+			provider: "test-provider",
+			id: "test-model",
+			contextWindow: 128_000,
+			cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 1 },
+		},
+		modelRegistry: { isUsingOAuth: () => false },
+		getContextUsage: () => ({ tokens: 8_000, contextWindow: 128_000, percent: 6.25 }),
 	} as unknown as ExtensionContext;
 
 	providerGateExtension(pi);
@@ -250,6 +330,11 @@ test("the Pi hook replaces edited approvals and aborts rejected requests", async
 		"Provider authorization UI: ".length,
 	);
 	assert.ok(browserUrl);
+	const metricsUrl = new URL("/metrics", browserUrl);
+	metricsUrl.search = new URL(browserUrl).search;
+	const metrics = (await (await fetch(metricsUrl)).json()) as { model: { id: string }; context: { tokens: number } };
+	assert.equal(metrics.model.id, "test-model");
+	assert.equal(metrics.context.tokens, 8_000);
 	assert.equal(await beforeRequest({ payload: { input: [{ role: "user", content: "hello" }, { type: "function_call" }] } }, ctx), undefined);
 	const stateBeforeCommands = new URL("/state", browserUrl);
 	stateBeforeCommands.search = new URL(browserUrl).search;
@@ -258,9 +343,13 @@ test("the Pi hook replaces edited approvals and aborts rejected requests", async
 	const gateOff = commands.get("gate-off");
 	const gateOn = commands.get("gate-on");
 	assert.ok(gateOff && gateOn);
-	await gateOff("", ctx);
 	assert.equal(await beforeRequest({ payload: { input: [{ role: "user", content: "bypassed" }] } }, ctx), undefined);
-	assert.deepEqual(await (await fetch(stateBeforeCommands)).json(), []);
+	const bypassedAtStartup = (await (await fetch(stateBeforeCommands)).json()) as Array<{
+		status: string;
+		userMessage?: string;
+	}>;
+	assert.equal(bypassedAtStartup[0]?.status, "bypassed");
+	assert.equal(bypassedAtStartup[0]?.userMessage, "bypassed");
 	await gateOn("", ctx);
 
 	const editedPending = beforeRequest({ payload: { input: [{ role: "user", content: "secret" }], temperature: 1 } }, ctx);
@@ -307,6 +396,15 @@ test("the Pi hook replaces edited approvals and aborts rejected requests", async
 			{ role: "user", content: "next" },
 		],
 	});
+	const bypassedReviews = (await (await fetch(stateUrl)).json()) as Array<{
+		status: string;
+		rawPayload: string;
+		sentPayload: string;
+	}>;
+	assert.equal(bypassedReviews[0]?.status, "bypassed");
+	assert.match(bypassedReviews[0]!.rawPayload, /secret/);
+	assert.match(bypassedReviews[0]!.sentPayload, /reviewed/);
+	assert.doesNotMatch(bypassedReviews[0]!.sentPayload, /secret/);
 	await gateOn("", ctx);
 
 	const projectedPending = beforeRequest(

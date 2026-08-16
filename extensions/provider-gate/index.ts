@@ -24,7 +24,7 @@ export default function providerGate(pi: ExtensionAPI): void {
 	let server: ProviderGateServer | undefined;
 	let url: string | undefined;
 	let startupError: string | undefined;
-	let enabled = true;
+	let enabled = false;
 
 	const statusText = () => (enabled ? "provider gate: armed" : "provider gate: bypass");
 	const updateMetrics = (ctx: ExtensionContext) => {
@@ -60,7 +60,7 @@ export default function providerGate(pi: ExtensionAPI): void {
 			}
 		} catch (error) {
 			startupError = error instanceof Error ? error.message : String(error);
-			if (ctx.hasUI) ctx.ui.notify(`Provider gate failed closed: ${startupError}`, "error");
+			if (ctx.hasUI) ctx.ui.notify(`Provider gate audit UI unavailable: ${startupError}`, "error");
 		}
 	});
 
@@ -68,7 +68,11 @@ export default function providerGate(pi: ExtensionAPI): void {
 	pi.on("before_provider_request", async (event, ctx) => {
 		updateMetrics(ctx);
 		const projection = ledger.project(event.payload);
-		if (!enabled || !shouldGatePayload(projection.payload)) return projection.changed ? projection.payload : undefined;
+		if (!shouldGatePayload(projection.payload)) return projection.changed ? projection.payload : undefined;
+		if (!enabled) {
+			queue.observe(projection);
+			return projection.changed ? projection.payload : undefined;
+		}
 		if (!server || !url || startupError) {
 			ctx.abort();
 			if (ctx.hasUI) ctx.ui.notify(`Provider request rejected: ${startupError ?? "gate is unavailable"}`, "error");
@@ -115,12 +119,15 @@ export default function providerGate(pi: ExtensionAPI): void {
 
 	// Estos comandos de Pi alternan la compuerta durante la sesión actual.
 	pi.registerCommand("gate-off", {
-		description: "Bypass provider request approval for this session",
+		description: "Log provider requests without waiting for approval",
 		handler: async (_args, ctx) => {
 			enabled = false;
 			const released = queue.approveAll();
 			ctx.ui.setStatus("provider-gate", statusText());
-			ctx.ui.notify(`Provider gate disabled${released > 0 ? `; released ${released} pending request(s)` : ""}`, "warning");
+			ctx.ui.notify(
+				`Provider gate disabled; requests remain visible in the audit UI${released > 0 ? `; released ${released} pending request(s)` : ""}`,
+				"warning",
+			);
 		},
 	});
 

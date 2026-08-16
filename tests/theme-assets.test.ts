@@ -22,3 +22,14 @@ test("pixel-green is a valid loadable Pi theme", async () => {
 	assert.equal(theme.name, "pixel-green");
 	assert.match(theme.fg("accent", "signal"), /signal/);
 });
+
+test("orchestrator role themes are valid and loadable", async () => {
+	for (const name of ["pixel-cyan", "pixel-magenta"]) {
+		const path = resolve(`themes/${name}.json`);
+		const document = JSON.parse(await readFile(path, "utf8")) as { name?: string };
+		const theme = loadThemeFromPath(path);
+		assert.equal(document.name, name);
+		assert.equal(theme.name, name);
+		assert.match(theme.fg("accent", "signal"), /signal/);
+	}
+});

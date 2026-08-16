@@ -21,6 +21,8 @@ export default function themeMap(pi: ExtensionAPI): void {
 	let config: ThemeMapConfig | undefined;
 	let activeProfile: string | undefined;
 	let originalTheme: Theme | undefined;
+	let currentContext: ExtensionContext | undefined;
+	let requestedProfile: string | undefined;
 
 	// Pi expone las selecciones de arranque como flags propias de la extensión.
 	pi.registerFlag("theme-map-config", {
@@ -90,6 +92,7 @@ export default function themeMap(pi: ExtensionAPI): void {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		currentContext = ctx;
 		if (!ctx.hasUI || ctx.ui.getAllThemes().length === 0) return;
 		originalTheme = ctx.ui.theme;
 		if (!(await loadConfig(ctx)) || !config) return;
@@ -97,10 +100,17 @@ export default function themeMap(pi: ExtensionAPI): void {
 		const requested = pi.getFlag("theme-profile");
 		const profileName = selectInitialProfile(
 			config,
-			typeof requested === "string" ? requested : undefined,
+			requestedProfile ?? (typeof requested === "string" ? requested : undefined),
 			process.argv,
 		);
 		if (profileName) activate(profileName, ctx);
+	});
+
+	// El bus de Pi permite que otra extensión solicite un perfil sin importar el orden de carga.
+	pi.events.on("theme-map:activate", (data) => {
+		if (typeof data !== "string" || !data.trim()) return;
+		requestedProfile = data.trim();
+		if (currentContext && config) activate(requestedProfile, currentContext);
 	});
 
 	// El comando de Pi permite seleccionar, recargar o restaurar perfiles en caliente.
@@ -135,5 +145,9 @@ export default function themeMap(pi: ExtensionAPI): void {
 			if (selected === "(restore original)") restore(ctx);
 			else activate(selected, ctx);
 		},
+	});
+
+	pi.on("session_shutdown", () => {
+		currentContext = undefined;
 	});
 }

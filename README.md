@@ -6,6 +6,7 @@ Paquete local de Pi con extensiones separadas y configuración de proyecto.
 
 ```text
 extensions/
+  orchestrator/     Pools de agentes efímeros y persistentes sobre tmux
   pi-anim/          Animación senoidal durante el trabajo del agente
   provider-gate/    Aprobación humana antes de cada request al provider
   provider-wire-debug/ Proxy HTTP opt-in para inspeccionar el body real
@@ -21,7 +22,33 @@ tests/
 ```bash
 npm install
 pi install -l .
+# Desde un remoto SSH (el prefijo git: es obligatorio para el formato git@host:path)
+pi install -l git:git@github.com:usuario/PiCommon.git
 ```
+
+`-l` instala la referencia en el `settings.json` del proyecto; no limita los
+recursos del paquete. Para elegir extensiones por proyecto, ejecute
+`pi config -l` o use el filtro explícito:
+
+```json
+{
+  "packages": [
+    {
+      "source": "/ruta/a/PiCommon",
+      "extensions": [
+        "extensions/theme-map/index.ts",
+        "extensions/orchestrator/index.ts"
+      ],
+      "skills": [],
+      "prompts": [],
+      "themes": []
+    }
+  ]
+}
+```
+
+Los paths normales forman una allowlist. Omitir una categoría carga todos sus
+recursos declarados; usar `[]` no carga ninguno.
 
 También se pueden probar directamente:
 
@@ -34,6 +61,14 @@ pi \
 ## Animación
 
 `pi-anim` monta el widget mientras el agente está activo, anima una señal senoidal con ruido binario y lo desmonta al finalizar. El mensaje del loader queda configurado como `PHANTOM SIGNAL // MODEL PROCESSING`.
+
+## Orquestador
+
+`orchestrator` distribuye tareas entre roles configurados en YAML, mantiene
+workers Pi interactivos en tmux y expone agentes efímeros para tareas puntuales.
+
+La configuración, comandos, shortcuts, worktrees y modelo de seguridad están en
+[extensions/orchestrator/README.md](extensions/orchestrator/README.md).
 
 ## Paths protegidos
 
@@ -101,7 +136,8 @@ La selección inicial sigue este orden:
 ## Compuerta de autorización del provider
 
 `provider-gate` intercepta las llamadas al LLM y permite inspeccionar, editar,
-aprobar o rechazar el payload efectivo. La compuerta está activada por defecto.
+aprobar o rechazar el payload efectivo. Arranca en bypass auditado: no espera
+input humano, pero registra en la UI cada request aplicable.
 
 La documentación de comandos, `DROP LAST TURN`, persistencia y opciones está en
 [extensions/provider-gate/README.md](extensions/provider-gate/README.md).

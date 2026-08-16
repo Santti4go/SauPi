@@ -56,6 +56,7 @@ test("applies a Theme instance without persisting a theme name", async () => {
 	const handlers = new Map<string, (...args: unknown[]) => unknown>();
 	const flags = new Map<string, boolean | string | undefined>();
 	const pi = {
+		events: { on: () => () => undefined, emit() {} },
 		registerFlag(name: string, options: { default?: boolean | string }) {
 			flags.set(name, options.default);
 		},
@@ -102,6 +103,7 @@ test("stays inactive without a project config", async () => {
 	const flags = new Map<string, boolean | string | undefined>();
 	const notifications: string[] = [];
 	const pi = {
+		events: { on: () => () => undefined, emit() {} },
 		registerFlag(name: string, options: { default?: boolean | string }) {
 			flags.set(name, options.default);
 		},
@@ -129,4 +131,61 @@ test("stays inactive without a project config", async () => {
 	await sessionStart({}, ctx);
 
 	assert.deepEqual(notifications, []);
+});
+
+test("accepts a profile activation from another extension before session start", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "pi-theme-map-event-"));
+	await mkdir(join(cwd, ".pi"));
+	await writeFile(
+		join(cwd, ".pi", "theme-map.yaml"),
+		"activeProfile: orchestrator\nprofiles:\n  orchestrator: pixel-green\n  developer: pixel-cyan\n",
+	);
+	const handlers = new Map<string, (...args: unknown[]) => unknown>();
+	const eventHandlers = new Map<string, (data: unknown) => void>();
+	const flags = new Map<string, boolean | string | undefined>();
+	const pi = {
+		events: {
+			on(name: string, handler: (data: unknown) => void) {
+				eventHandlers.set(name, handler);
+				return () => eventHandlers.delete(name);
+			},
+			emit(name: string, data: unknown) {
+				eventHandlers.get(name)?.(data);
+			},
+		},
+		registerFlag(name: string, options: { default?: boolean | string }) {
+			flags.set(name, options.default);
+		},
+		getFlag(name: string) {
+			return flags.get(name);
+		},
+		registerCommand() {},
+		on(name: string, handler: (...args: unknown[]) => unknown) {
+			handlers.set(name, handler);
+		},
+	} as unknown as ExtensionAPI;
+	const green = { name: "pixel-green" };
+	const cyan = { name: "pixel-cyan" };
+	const applied: unknown[] = [];
+	const ctx = {
+		cwd,
+		hasUI: true,
+		ui: {
+			theme: green,
+			getAllThemes: () => [{ name: "pixel-green" }, { name: "pixel-cyan" }],
+			getTheme: (name: string) => (name === "pixel-cyan" ? cyan : green),
+			setTheme: (theme: unknown) => {
+				applied.push(theme);
+				return { success: true };
+			},
+			setStatus() {},
+			setTitle() {},
+			notify() {},
+		},
+	} as unknown as ExtensionContext;
+
+	themeMapExtension(pi);
+	pi.events.emit("theme-map:activate", "developer");
+	await handlers.get("session_start")?.({}, ctx);
+	assert.deepEqual(applied, [cyan]);
 });

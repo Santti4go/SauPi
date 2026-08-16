@@ -9,3 +9,15 @@ profiles:
   pixel-green:
     theme: pixel-green
     title: "π - pixel green"
+
+  orchestrator:
+    theme: pixel-green
+    title: "π // orchestrator"
+
+  developer:
+    theme: pixel-cyan
+    title: "π // developer"
+
+  marketing:
+    theme: pixel-magenta
+    title: "π // marketing"

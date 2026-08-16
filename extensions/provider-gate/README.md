@@ -6,9 +6,14 @@ una interfaz HTTP local y espera una decisión antes de entregarlo al provider.
 
 ## Comportamiento predeterminado
 
-La compuerta está **activada por defecto** al iniciar cada sesión. Las requests
-cuyo último elemento representa un mensaje humano quedan bloqueadas hasta
-presionar `ACCEPT` o `REJECT` en la interfaz:
+La compuerta está **desactivada por defecto** al iniciar cada sesión, igual que
+si se hubiera ejecutado `/gate-off`. Las requests cuyo último elemento
+representa un mensaje humano continúan sin espera, pero se registran como
+`BYPASSED` en la interfaz. `RAW PI` conserva lo producido por Pi y `SENT`
+muestra exactamente la proyección entregada al provider.
+
+Al ejecutar `/gate-on`, esas requests quedan bloqueadas hasta presionar
+`ACCEPT` o `REJECT` en la interfaz:
 
 - `ACCEPT` libera el payload mostrado en `SENT`.
 - `REJECT` aborta la llamada y descarta las modificaciones pendientes.
@@ -26,11 +31,12 @@ cerrada y aborta las requests que deberían ser aprobadas.
 
 - `/provider-gate`: vuelve a abrir la interfaz de autorización de la sesión.
 - `/gate-off`: desactiva la espera de aprobación durante la sesión y libera las
-  requests pendientes. La proyección continúa aplicándose en segundo plano.
+  requests pendientes. Las nuevas requests siguen registrándose en la UI como
+  `BYPASSED` y la proyección continúa aplicándose en segundo plano.
 - `/gate-on`: reactiva la aprobación manual para las siguientes requests.
 
 El estado de `/gate-on` y `/gate-off` sólo dura durante la sesión actual. Una
-nueva sesión vuelve a comenzar con la compuerta activada.
+nueva sesión vuelve a comenzar con la compuerta desactivada.
 
 ## Inspección y edición
 

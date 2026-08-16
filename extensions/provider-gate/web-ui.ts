@@ -36,6 +36,7 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
     article { scroll-margin-top: 126px; border: 1px solid #29432f; background: #0b100c; }
     article.pending { border-color: #72ff94; }
     article.approved { border-color: #376e45; opacity: .82; }
+    article.bypassed { border-color: #315976; opacity: .9; }
     article.rejected { border-color: #a24455; opacity: .82; }
     article.cancelled { opacity: .6; }
     .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #203527; font-size: 12px; }
@@ -44,6 +45,7 @@ export const PROVIDER_GATE_HTML = String.raw`<!doctype html>
     .pending .status { color: #72ff94; }
     .rejected .status { color: #ff7087; }
     .approved .status { color: #68d984; }
+    .bypassed .status { color: #7bb8ff; }
     .edited { color: #d8c86c; }
     .projected { color: #7bb8ff; }
     .request-only { color: #ff9cab; }

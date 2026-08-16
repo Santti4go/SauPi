@@ -8,7 +8,7 @@ import {
 } from "./projection-ledger.ts";
 
 export type ReviewDecision = "approved" | "rejected" | "cancelled";
-export type ReviewStatus = "pending" | ReviewDecision;
+export type ReviewStatus = "pending" | "bypassed" | ReviewDecision;
 
 export interface ReviewResolution {
 	decision: ReviewDecision;
@@ -129,6 +129,30 @@ export class ApprovalQueue {
 		this.pruneHistory();
 		this.emit(review);
 		return { review, decision };
+	}
+
+	observe(projection: ProjectionResult): ProviderReview {
+		const rawSerialized = serializePayload(projection.rawPayload);
+		const sentSerialized = serializePayload(projection.payload);
+		const review: ProviderReview = {
+			id: randomUUID(),
+			sequence: this.nextSequence++,
+			createdAt: new Date().toISOString(),
+			rawPayload: rawSerialized,
+			sentPayload: sentSerialized,
+			userMessage: extractLatestUserMessage(projection.payload),
+			rawBytes: Buffer.byteLength(rawSerialized),
+			sentBytes: Buffer.byteLength(sentSerialized),
+			status: "bypassed",
+			modified: projection.changed,
+			appliedOperations: projection.appliedOperations,
+			requestOnlyChanges: false,
+			persistenceWarning: undefined,
+		};
+		this.reviews.unshift(review);
+		this.pruneHistory();
+		this.emit(review);
+		return review;
 	}
 
 	approve(id: string, candidate: string): ApprovalAttempt {
