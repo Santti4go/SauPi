@@ -18,6 +18,7 @@ export interface AgentDefinition {
 	themeProfile?: string | undefined;
 	model?: string | undefined;
 	tools?: string[] | undefined;
+	extensionPaths?: string[] | undefined;
 	cwd: string;
 }
 
@@ -39,6 +40,7 @@ interface AgentDefaults {
 	themeProfile?: string | undefined;
 	model?: string | undefined;
 	tools?: string[] | undefined;
+	extensionPaths?: string[] | undefined;
 	cwd: string;
 }
 
@@ -79,6 +81,15 @@ function tools(value: unknown, field: string): string[] | undefined {
 	return normalized.length > 0 ? normalized : undefined;
 }
 
+function paths(value: unknown, field: string, cwd: string): string[] | undefined {
+	if (value === undefined) return undefined;
+	const values = typeof value === "string" ? [value] : value;
+	if (!Array.isArray(values) || values.some((item) => typeof item !== "string" || !(item as string).trim())) {
+		throw new Error(`"${field}" must be a non-empty string or string list`);
+	}
+	return [...new Set(values.map((item) => resolve(cwd, (item as string).trim())))];
+}
+
 function count(value: unknown, field: string): number {
 	const result = value === undefined ? 1 : value;
 	if (!Number.isInteger(result) || (result as number) < 1 || (result as number) > 16) {
@@ -96,6 +107,7 @@ function validateName(value: string, field: string): string {
 
 function parseDefaults(value: unknown, cwd: string): AgentDefaults {
 	const source = optionalMapping(value, "defaults");
+	const extensionPaths = paths(source.extensions, "defaults.extensions", cwd);
 	return {
 		lifecycle: choice(source.lifecycle, "defaults.lifecycle", ["persistent", "ephemeral"], "persistent"),
 		workspace: choice(source.workspace, "defaults.workspace", ["shared", "worktree"], "shared"),
@@ -103,6 +115,7 @@ function parseDefaults(value: unknown, cwd: string): AgentDefaults {
 		...(optionalText(source.themeProfile, "defaults.themeProfile") ? { themeProfile: text(source.themeProfile, "defaults.themeProfile") } : {}),
 		...(optionalText(source.model, "defaults.model") ? { model: text(source.model, "defaults.model") } : {}),
 		...(tools(source.tools, "defaults.tools") ? { tools: tools(source.tools, "defaults.tools") } : {}),
+		...(extensionPaths ? { extensionPaths } : {}),
 		cwd: resolve(cwd, optionalText(source.cwd, "defaults.cwd") ?? "."),
 	};
 }
@@ -113,6 +126,7 @@ function parseAgent(value: unknown, index: number, defaults: AgentDefaults, cwd:
 	const name = validateName(text(source.name, `${prefix}.name`), `${prefix}.name`);
 	const prompt = text(source.prompt, `${prefix}.prompt`);
 	const parsedTools = tools(source.tools, `${prefix}.tools`) ?? defaults.tools;
+	const extensionPaths = paths(source.extensions, `${prefix}.extensions`, cwd) ?? defaults.extensionPaths;
 	const themeProfile = optionalText(source.themeProfile, `${prefix}.themeProfile`) ?? defaults.themeProfile;
 	const model = optionalText(source.model, `${prefix}.model`) ?? defaults.model;
 	return {
@@ -126,6 +140,7 @@ function parseAgent(value: unknown, index: number, defaults: AgentDefaults, cwd:
 		...(themeProfile ? { themeProfile } : {}),
 		...(model ? { model } : {}),
 		...(parsedTools ? { tools: parsedTools } : {}),
+		...(extensionPaths ? { extensionPaths } : {}),
 		cwd: resolve(cwd, optionalText(source.cwd, `${prefix}.cwd`) ?? defaults.cwd),
 	};
 }

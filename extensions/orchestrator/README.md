@@ -88,6 +88,24 @@ pueden agregar nuevos renderers y seleccionarlos desde el YAML.
 El prompt del rol se incorpora con `--append-system-prompt`. No reemplaza las
 instrucciones generales ni los archivos `AGENTS.md` del proyecto.
 
+`extensions` permite cargar extensiones explícitas en los workers aun cuando
+éstos usan `--no-extensions`. Los paths son relativos al proyecto; por ejemplo,
+para habilitar la compuerta en un rol persistente:
+
+```yaml
+agents:
+  - name: reviewer
+    description: Reviews changes with provider approval
+    prompt: .pi/agents/reviewer.md
+    lifecycle: persistent
+    extensions:
+      - ../PiCommon/extensions/provider-gate/index.ts
+```
+
+El `provider-gate` queda inicialmente en bypass, como en cualquier sesión Pi.
+Abrí el pane del worker y ejecutá `/gate-on` para exigir aprobación; `/gate-off`
+lo vuelve a desactivar.
+
 ## Lifecycles
 
 ### Persistent
@@ -159,6 +177,10 @@ Comandos:
 - `/agent-start developer-1`: inicia una instancia persistente.
 - `/agent-stop developer-1`: detiene sólo su window; pide confirmación si está
   ocupado.
+- `/agent-close developer-1`: reemplaza el worker por una conversación Pi libre
+  y nueva, sin historial ni contexto conversacional del worker, en el mismo pane.
+  Ya no puede recibir delegaciones; `/agent-start developer-1` lo vuelve a
+  convertir en worker.
 - `/agent-jump`: selecciona una instancia y cambia el cliente tmux a su pane.
 - `/agent-jump developer-1`: salta directamente a esa instancia.
 - `/agent-send <role> <task>`: delega una tarea manualmente.

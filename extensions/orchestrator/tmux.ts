@@ -107,6 +107,19 @@ export class TmuxManager {
 		return target.stdout.trim();
 	}
 
+	async respawnWorker(session: string, window: string, cwd: string, command: string[]): Promise<void> {
+		const result = await this.runner.exec("tmux", [
+			"respawn-window",
+			"-k",
+			"-t",
+			`${session}:${window}`,
+			"-c",
+			cwd,
+			`exec ${command.map(shellQuote).join(" ")}`,
+		]);
+		if (result.code !== 0) throw new Error(result.stderr.trim() || `Could not respawn tmux window ${window}`);
+	}
+
 	async jump(target: string): Promise<void> {
 		const result = await this.runner.exec("tmux", ["switch-client", "-t", target]);
 		if (result.code !== 0) throw new Error(result.stderr.trim() || `Could not switch to ${target}`);

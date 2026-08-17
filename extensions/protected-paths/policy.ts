@@ -137,6 +137,32 @@ export function collectShellPathCandidates(command: string): string[] {
 	return candidates;
 }
 
+function gitControlDirectories(command: string, cwd: string): string[] {
+	const controlDirectories: string[] = [];
+	for (const segment of command.split(/[;&|]/)) {
+		const tokens = segment.match(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g) ?? [];
+		const gitIndex = tokens.findIndex((token) => token.replace(/^(['"])(.*)\1$/, "$2") === "git");
+		if (gitIndex < 0) continue;
+
+		let directory = cwd;
+		for (let index = gitIndex + 1; index < tokens.length; index++) {
+			const token = tokens[index]!.replace(/^(['"])(.*)\1$/, "$2");
+			if (token === "-C" && tokens[index + 1]) directory = resolve(directory, tokens[++index]!);
+			else if (token.startsWith("-C") && token.length > 2) directory = resolve(directory, token.slice(2));
+		}
+		// Git walks parent directories to find its control directory. Resolve the
+		// working directory first so a symlinked module cannot bypass the policy.
+		let current = canonicalize(directory, cwd);
+		while (true) {
+			controlDirectories.push(resolve(current, ".git"));
+			const parent = dirname(current);
+			if (parent === current) break;
+			current = parent;
+		}
+	}
+	return controlDirectories;
+}
+
 export function findProtectedTarget(
 	policy: ProtectionPolicy,
 	input: unknown,
@@ -144,7 +170,12 @@ export function findProtectedTarget(
 	shellCommand?: string,
 ): { candidate: string; rule: ProtectedPathRule } | undefined {
 	const candidates = collectPathArguments(input);
-	if (shellCommand) candidates.push(...collectShellPathCandidates(shellCommand));
+	if (shellCommand) {
+		candidates.push(...collectShellPathCandidates(shellCommand));
+		// Git operations access its control directory even when the command only
+		// names a worktree (for example: `git -C /project status`).
+		candidates.push(...gitControlDirectories(shellCommand, cwd));
+	}
 
 	for (const candidate of candidates) {
 		if (candidate.length === 0 || candidate === "-") continue;

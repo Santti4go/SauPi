@@ -43,6 +43,8 @@ defaults:
   cwd: . # Default working directory for every agent.
   # model: provider/model-id # Optional Pi model override inherited by every agent.
   tools: read, grep, find, ls # Allowed Pi tools. Use a comma-separated string or YAML list.
+  # extensions: # Optional explicit extensions loaded by every worker (paths relative to project root).
+  #   - ../PiCommon/extensions/provider-gate/index.ts
   # themeProfile: developer # Optional theme-map profile inherited by every agent.
 
 agents:

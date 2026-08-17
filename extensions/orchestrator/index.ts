@@ -155,6 +155,7 @@ export default function orchestrator(pi: ExtensionAPI): void {
 				"--append-system-prompt",
 				instance.definition.promptPath,
 			];
+			for (const extension of instance.definition.extensionPaths ?? []) command.push("--extension", extension);
 			if (instance.definition.themeProfile) command.push("--theme-profile", instance.definition.themeProfile);
 			if (instance.definition.model) command.push("--model", instance.definition.model);
 			if (instance.definition.tools) command.push("--tools", instance.definition.tools.join(","));
@@ -401,6 +402,45 @@ export default function orchestrator(pi: ExtensionAPI): void {
 				error: undefined,
 			});
 			ctx.ui.notify(`${instance.id} stopped`, "info");
+		},
+	});
+
+	pi.registerCommand("agent-close", {
+		description: "Release a persistent worker into a normal Pi conversation: /agent-close developer-1",
+		handler: async (args, ctx) => {
+			const instance = registry?.get(args.trim());
+			if (!instance || !registry || !tmux || !config) {
+				ctx.ui.notify(`Unknown agent "${args.trim()}"`, "error");
+				return;
+			}
+			if (instance.definition.lifecycle !== "persistent" || !instance.tmuxTarget || !instance.workspacePath) {
+				ctx.ui.notify(`${instance.id} has no running persistent worker`, "warning");
+				return;
+			}
+			if (instance.status === "busy") {
+				const confirmed = await ctx.ui.confirm("Close busy agent?", `${instance.id} is working on a task. Its current turn will be interrupted.`);
+				if (!confirmed) return;
+			}
+			const command = [
+				...currentPiCommand(),
+				"--approve",
+				"--no-extensions",
+				"--name",
+				instance.id,
+			];
+			for (const extension of instance.definition.extensionPaths ?? []) command.push("--extension", extension);
+			if (instance.definition.model) command.push("--model", instance.definition.model);
+			if (instance.definition.tools) command.push("--tools", instance.definition.tools.join(","));
+			const target = instance.tmuxTarget;
+			await tmux.respawnWorker(tmuxSession, instance.id, instance.workspacePath, command);
+			registry.update(instance.id, {
+				status: "offline",
+				tmuxTarget: undefined,
+				currentTaskId: undefined,
+				error: undefined,
+			});
+			ctx.ui.notify(`${instance.id} is now a new, free Pi conversation with no worker history; it is no longer available for delegation.`, "info");
+			if (process.env.TMUX) await tmux.jump(target);
 		},
 	});
 
