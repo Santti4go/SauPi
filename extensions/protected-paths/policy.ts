@@ -36,7 +36,7 @@ function expandHome(value: string): string {
 	return value;
 }
 
-function canonicalize(inputPath: string, cwd: string): string {
+export function canonicalize(inputPath: string, cwd: string): string {
 	const expanded = expandHome(inputPath.replace(/^@/, ""));
 	const absolute = isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded);
 	let existing = absolute;

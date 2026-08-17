@@ -3,6 +3,20 @@ import { basename, resolve } from "node:path";
 
 const FILES = [
 	{
+		path: ".pi/orchestrator-policy.yaml",
+		content: `# Role-specific mutation policy. Global .pi/protected-paths.yaml always wins.
+version: 1
+roles:
+  agent1:
+    allow:
+      - "**" # Narrow this to the directories the developer may modify.
+    deny: []
+  agent2:
+    allow: [] # Researcher cannot mutate files.
+    deny: []
+`,
+	},
+	{
 		path: ".pi/prompts/agent1.md",
 		content: `# Agent 1 — Developer
 

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -66,6 +66,7 @@ export default function orchestrator(pi: ExtensionAPI): void {
 	let activeUiTheme: OrchestratorConfig["orchestratorUiTheme"] = "orchestrator-list";
 	const extensionRoot = dirname(fileURLToPath(import.meta.url));
 	const workerExtension = resolve(extensionRoot, "worker/index.ts");
+	const roleGuardExtension = resolve(extensionRoot, "role-guard.ts");
 	const themeMapExtension = resolve(extensionRoot, "../theme-map/index.ts");
 	const themesDirectory = resolve(extensionRoot, "../../themes");
 
@@ -134,6 +135,10 @@ export default function orchestrator(pi: ExtensionAPI): void {
 				`PI_ORCHESTRATOR_AGENT_ROLE=${instance.role}`,
 				`PI_ORCHESTRATOR_SOCKET=${socketPath}`,
 				`PI_ORCHESTRATOR_TMUX_TARGET=${targetName}`,
+				`PI_ORCHESTRATOR_PROJECT_ROOT=${currentContext.cwd}`,
+				`PI_ORCHESTRATOR_WORKSPACE_ROOT=${workspace.root}`,
+				`PI_ORCHESTRATOR_POLICY_CONFIG=${resolve(currentContext.cwd, ".pi", "orchestrator-policy.yaml")}`,
+				`PI_ORCHESTRATOR_GLOBAL_PROTECTED_CONFIG=${resolve(currentContext.cwd, ".pi", "protected-paths.yaml")}`,
 				...(orchestratorTarget ? [`PI_ORCHESTRATOR_PARENT_TARGET=${orchestratorTarget}`] : []),
 				...currentPiCommand(),
 				"--approve",
@@ -142,6 +147,8 @@ export default function orchestrator(pi: ExtensionAPI): void {
 				themeMapExtension,
 				"--extension",
 				workerExtension,
+				"--extension",
+				roleGuardExtension,
 				"--theme",
 				themesDirectory,
 				"--theme-map-config",
@@ -382,11 +389,15 @@ export default function orchestrator(pi: ExtensionAPI): void {
 		description: "Stop one persistent agent instance: /agent-stop developer-1",
 		handler: async (args, ctx) => {
 			const instance = registry?.get(args.trim());
-			if (!instance || !registry || !tmux) {
+			if (!instance || !registry || !tmux || !config) {
 				ctx.ui.notify(`Unknown agent "${args.trim()}"`, "error");
 				return;
 			}
-			if (instance.definition.lifecycle !== "persistent" || !instance.tmuxTarget) {
+			if (instance.definition.lifecycle !== "persistent") {
+				ctx.ui.notify(`${instance.id} has no persistent tmux pane`, "warning");
+				return;
+			}
+			if (!instance.tmuxTarget && !(await tmux.hasWindow(tmuxSession, instance.id))) {
 				ctx.ui.notify(`${instance.id} has no persistent tmux pane`, "warning");
 				return;
 			}
@@ -395,6 +406,7 @@ export default function orchestrator(pi: ExtensionAPI): void {
 				if (!confirmed) return;
 			}
 			await tmux.stopWorker(tmuxSession, instance.id);
+			await rm(resolve(config.runtimeDir, "sessions", instance.id), { recursive: true, force: true });
 			registry.update(instance.id, {
 				status: "offline",
 				tmuxTarget: undefined,
@@ -402,6 +414,50 @@ export default function orchestrator(pi: ExtensionAPI): void {
 				error: undefined,
 			});
 			ctx.ui.notify(`${instance.id} stopped`, "info");
+		},
+	});
+
+	pi.registerCommand("agents-stop-all", {
+		description: "Stop every running persistent agent and clear their saved sessions",
+		handler: async (_args, ctx) => {
+			if (!registry || !tmux || !config) {
+				ctx.ui.notify(`Orchestrator is unavailable${startupError ? `: ${startupError}` : ""}`, "error");
+				return;
+			}
+			const running: AgentInstance[] = [];
+			for (const instance of registry.all()) {
+				if (instance.definition.lifecycle !== "persistent") continue;
+				if (instance.tmuxTarget || (await tmux.hasWindow(tmuxSession, instance.id))) running.push(instance);
+			}
+			if (running.length === 0) {
+				ctx.ui.notify("No persistent agent panes are running", "info");
+				return;
+			}
+			const busy = running.filter((instance) => instance.status === "busy");
+			const detail = busy.length > 0 ? ` ${busy.map((instance) => instance.id).join(", ")} ${busy.length === 1 ? "is" : "are"} busy and will be interrupted.` : "";
+			const confirmed = await ctx.ui.confirm("Stop all persistent agents?", `This stops ${running.length} agent ${running.length === 1 ? "pane" : "panes"} and erases their saved conversation history.${detail}`);
+			if (!confirmed) return;
+
+			const failures: string[] = [];
+			for (const instance of running) {
+				try {
+					await tmux.stopWorker(tmuxSession, instance.id);
+					await rm(resolve(config.runtimeDir, "sessions", instance.id), { recursive: true, force: true });
+					registry.update(instance.id, {
+						status: "offline",
+						tmuxTarget: undefined,
+						currentTaskId: undefined,
+						error: undefined,
+					});
+				} catch (error) {
+					failures.push(`${instance.id}: ${errorMessage(error)}`);
+				}
+			}
+			if (failures.length > 0) {
+				ctx.ui.notify(`Stopped ${running.length - failures.length}/${running.length} agents. ${failures.join("; ")}`, "error");
+			} else {
+				ctx.ui.notify(`Stopped ${running.length} persistent agents and cleared their saved sessions`, "info");
+			}
 		},
 	});
 
@@ -413,8 +469,13 @@ export default function orchestrator(pi: ExtensionAPI): void {
 				ctx.ui.notify(`Unknown agent "${args.trim()}"`, "error");
 				return;
 			}
-			if (instance.definition.lifecycle !== "persistent" || !instance.tmuxTarget || !instance.workspacePath) {
-				ctx.ui.notify(`${instance.id} has no running persistent worker`, "warning");
+			if (instance.definition.lifecycle !== "persistent" || !instance.workspacePath) {
+				ctx.ui.notify(`${instance.id} has no persistent workspace to close`, "warning");
+				return;
+			}
+			const target = instance.tmuxTarget ?? `${tmuxSession}:${instance.id}`;
+			if (!instance.tmuxTarget && !(await tmux.hasWindow(tmuxSession, instance.id))) {
+				ctx.ui.notify(`${instance.id} has no running or released tmux pane`, "warning");
 				return;
 			}
 			if (instance.status === "busy") {
@@ -431,8 +492,8 @@ export default function orchestrator(pi: ExtensionAPI): void {
 			for (const extension of instance.definition.extensionPaths ?? []) command.push("--extension", extension);
 			if (instance.definition.model) command.push("--model", instance.definition.model);
 			if (instance.definition.tools) command.push("--tools", instance.definition.tools.join(","));
-			const target = instance.tmuxTarget;
 			await tmux.respawnWorker(tmuxSession, instance.id, instance.workspacePath, command);
+			await rm(resolve(config.runtimeDir, "sessions", instance.id), { recursive: true, force: true });
 			registry.update(instance.id, {
 				status: "offline",
 				tmuxTarget: undefined,

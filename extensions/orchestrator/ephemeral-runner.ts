@@ -4,6 +4,15 @@ import { basename } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { AgentDefinition } from "./config.ts";
 
+export interface GuardEnvironment {
+	role: string;
+	projectRoot: string;
+	workspaceRoot: string;
+	policyConfig: string;
+	globalProtectedConfig: string;
+	extensionPath: string;
+}
+
 export interface AgentRunResult {
 	output: string;
 	isError: boolean;
@@ -41,7 +50,8 @@ export async function runEphemeralAgent(
 	task: string,
 	cwd: string,
 	signal: AbortSignal | undefined,
-	onProgress?: (message: string) => void,
+	onProgress: ((message: string) => void) | undefined,
+	guard: GuardEnvironment,
 ): Promise<AgentRunResult> {
 	const args = [
 		"--mode",
@@ -49,6 +59,8 @@ export async function runEphemeralAgent(
 		"--print",
 		"--no-session",
 		"--no-extensions",
+		"--extension",
+		guard.extensionPath,
 		"--append-system-prompt",
 		definition.promptPath,
 	];
@@ -57,7 +69,19 @@ export async function runEphemeralAgent(
 	args.push(`Task: ${task}`);
 
 	const invocation = piInvocation(args);
-	const child = spawn(invocation.command, invocation.args, { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+	const child = spawn(invocation.command, invocation.args, {
+		cwd,
+		env: {
+			...process.env,
+			PI_ORCHESTRATOR_AGENT_ROLE: guard.role,
+			PI_ORCHESTRATOR_PROJECT_ROOT: guard.projectRoot,
+			PI_ORCHESTRATOR_WORKSPACE_ROOT: guard.workspaceRoot,
+			PI_ORCHESTRATOR_POLICY_CONFIG: guard.policyConfig,
+			PI_ORCHESTRATOR_GLOBAL_PROTECTED_CONFIG: guard.globalProtectedConfig,
+		},
+		shell: false,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
 	const decoder = new StringDecoder("utf8");
 	let stdoutBuffer = "";
 	let stderr = "";

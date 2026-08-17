@@ -12,6 +12,7 @@ proyecto desde este paquete:
 ```bash
 mkdir -p .pi/agents
 cp /ruta/a/PiCommon/examples/orchestrator.yaml .pi/orchestrator.yaml
+cp /ruta/a/PiCommon/examples/orchestrator-policy.yaml .pi/orchestrator-policy.yaml
 cp /ruta/a/PiCommon/examples/orchestrator/agents/*.md .pi/agents/
 cp /ruta/a/PiCommon/examples/theme-map.yaml .pi/theme-map.yaml
 ```
@@ -87,6 +88,36 @@ pueden agregar nuevos renderers y seleccionarlos desde el YAML.
 
 El prompt del rol se incorpora con `--append-system-prompt`. No reemplaza las
 instrucciones generales ni los archivos `AGENTS.md` del proyecto.
+
+## Protección por rol
+
+Cada worker carga automáticamente el guard de roles. Antes de cada operación
+mutante vuelve a leer `.pi/orchestrator-policy.yaml`; un YAML ausente, inválido,
+un rol ausente o una ruta sin `allow` bloquean la operación. Las lecturas con
+`read`, `grep`, `find` y `ls` permanecen permitidas.
+
+```yaml
+version: 1
+roles:
+  developer:
+    allow:
+      - src/**
+      - tests/**
+      - package.json
+    deny:
+      - src/secrets/**
+    allowOutside:
+      - /tmp/pi-developer/**
+```
+
+Los globs son paths POSIX relativos al root del workspace: `*` cubre un
+segmento y `**` cubre cualquier profundidad. `allowOutside` sólo acepta globs
+absolutos y es la única forma de permitir escrituras fuera del repo. Las reglas
+de `.pi/protected-paths.yaml` siempre ganan, luego `deny`, luego `allow`.
+
+Bash se trata como mutante salvo para comandos read-only simples; comandos
+ambiguos se bloquean. Dentro de un worker, `/protected-paths-policy` muestra el
+rol, roots, YAML y reglas efectivas. El status del pane muestra `guard:<rol>`.
 
 `extensions` permite cargar extensiones explícitas en los workers aun cuando
 éstos usan `--no-extensions`. Los paths son relativos al proyecto; por ejemplo,
@@ -175,15 +206,20 @@ Comandos:
 - `/orchestrator-themes`: abre el selector de UI themes del roster.
 - `/orchestrator-themes orchestrator-grid`: activa un UI theme directamente.
 - `/agent-start developer-1`: inicia una instancia persistente.
-- `/agent-stop developer-1`: detiene sólo su window; pide confirmación si está
-  ocupado.
+- `/agent-stop developer-1`: detiene sólo su window, pide confirmación si está
+  ocupado y borra la sesión persistida del worker; al reiniciarlo no conserva
+  contexto anterior.
+- `/agents-stop-all`: pide una confirmación, detiene todos los panes de agentes
+  persistentes y borra sus sesiones guardadas.
 - `/agent-close developer-1`: reemplaza el worker por una conversación Pi libre
   y nueva, sin historial ni contexto conversacional del worker, en el mismo pane.
-  Ya no puede recibir delegaciones; `/agent-start developer-1` lo vuelve a
-  convertir en worker.
+  También borra la sesión persistida del worker. Ya no puede recibir
+  delegaciones; `/agent-start developer-1` lo vuelve a convertir en worker.
 - `/agent-jump`: selecciona una instancia y cambia el cliente tmux a su pane.
 - `/agent-jump developer-1`: salta directamente a esa instancia.
 - `/agent-send <role> <task>`: delega una tarea manualmente.
+- `/protected-paths-policy` (dentro de un worker): muestra la policy efectiva
+  del rol y las protecciones globales.
 
 La selección realizada por `/orchestrator-themes` dura durante la sesión
 actual. Para establecer el valor predeterminado del proyecto debe actualizarse

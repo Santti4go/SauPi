@@ -47,6 +47,18 @@ test("detects a protected path referenced by bash", async () => {
 	assert.equal(findProtectedTarget(policy, { command: "printf x > output.txt" }, cwd, "printf x > output.txt"), undefined);
 });
 
+test("detects Git access through a protected worktree", async () => {
+	const { cwd, configPath } = await fixture();
+	await mkdir(join(cwd, ".git"));
+	await mkdir(join(cwd, "backend"));
+	await writeFile(configPath, "protectedPaths:\n  - .git/\n");
+	const policy = await loadProtectionPolicy(configPath, cwd);
+
+	assert.ok(policy);
+	assert.ok(findProtectedTarget(policy, { command: "git -C . status" }, cwd, "git -C . status"));
+	assert.ok(findProtectedTarget(policy, { command: "git -C backend status" }, cwd, "git -C backend status"));
+});
+
 test("accepts a top-level YAML list", async () => {
 	const { cwd, configPath } = await fixture();
 	await writeFile(configPath, "- .env\n");

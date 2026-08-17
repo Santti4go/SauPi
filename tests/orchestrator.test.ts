@@ -9,6 +9,8 @@ import { loadOrchestratorConfig } from "../extensions/orchestrator/config.ts";
 import { initializeOrchestrator } from "../extensions/orchestrator/init.ts";
 import { encodeMessage, parseMessage } from "../extensions/orchestrator/protocol.ts";
 import { AgentRegistry } from "../extensions/orchestrator/registry.ts";
+import { evaluateRolePath, loadRolePolicy } from "../extensions/orchestrator/role-policy.ts";
+import roleGuard from "../extensions/orchestrator/role-guard.ts";
 import { defaultTmuxSession, TmuxManager, type TmuxCommandRunner } from "../extensions/orchestrator/tmux.ts";
 import { pingWorker, runWorkerTask } from "../extensions/orchestrator/worker-client.ts";
 import orchestratorWorker from "../extensions/orchestrator/worker/index.ts";
@@ -26,7 +28,7 @@ async function fixture(yaml: string): Promise<{ cwd: string; path: string }> {
 test("initializes a documented example without overwriting existing files", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-orchestrator-init-"));
 	const first = await initializeOrchestrator(cwd);
-	assert.deepEqual(first.created, [".pi/orchestrator.yaml", ".pi/prompts/agent1.md", ".pi/prompts/agent2.md"]);
+	assert.deepEqual(first.created, [".pi/orchestrator.yaml", ".pi/orchestrator-policy.yaml", ".pi/prompts/agent1.md", ".pi/prompts/agent2.md"]);
 	assert.deepEqual(first.skipped, []);
 
 	const yamlPath = join(cwd, ".pi", "orchestrator.yaml");
@@ -40,7 +42,7 @@ test("initializes a documented example without overwriting existing files", asyn
 	await writeFile(yamlPath, "custom: true\n");
 	const second = await initializeOrchestrator(cwd);
 	assert.deepEqual(second.created, []);
-	assert.deepEqual(second.skipped, [".pi/orchestrator.yaml", ".pi/prompts/agent1.md", ".pi/prompts/agent2.md"]);
+	assert.deepEqual(second.skipped, [".pi/orchestrator.yaml", ".pi/orchestrator-policy.yaml", ".pi/prompts/agent1.md", ".pi/prompts/agent2.md"]);
 	assert.equal(await readFile(yamlPath, "utf8"), "custom: true\n");
 });
 
@@ -62,6 +64,8 @@ agents:
     prompt: .pi/agents/developer.md
     workspace: worktree
     tools: read, edit, write
+    extensions:
+      - .pi/extensions/audit.ts
 `);
 	const config = await loadOrchestratorConfig(path, cwd);
 	assert.equal(config.projectName, "demo");
@@ -70,6 +74,7 @@ agents:
 	assert.equal(config.agents[0]?.promptPath, join(cwd, ".pi", "agents", "developer.md"));
 	assert.equal(config.agents[0]?.model, "gpt-configured");
 	assert.deepEqual(config.agents[0]?.tools, ["read", "edit", "write"]);
+	assert.deepEqual(config.agents[0]?.extensionPaths, [join(cwd, ".pi", "extensions", "audit.ts")]);
 
 	const registry = new AgentRegistry(config.agents);
 	assert.deepEqual(registry.all().map((agent) => agent.id), ["developer-1", "developer-2"]);
@@ -109,6 +114,78 @@ agents:
 	assert.ok(grid.some((line) => line.includes("model gpt-heartbeat")));
 	assert.ok(grid.every((line) => visibleWidth(line) <= 60));
 	assert.deepEqual(listOrchestratorUiThemes().map((theme) => theme.name), ["orchestrator-list", "orchestrator-grid"]);
+});
+
+test("enforces allow, deny, and explicit outside rules for roles", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "pi-orchestrator-role-policy-"));
+	const path = join(cwd, "policy.yaml");
+	await writeFile(path, `version: 1
+roles:
+  developer:
+    allow: [src/**]
+    deny: [src/secrets/**]
+    allowOutside: [/tmp/pi-output/**]
+`);
+	const policy = await loadRolePolicy(path);
+	const rules = policy?.roles.get("developer");
+	assert.ok(rules);
+	assert.equal(evaluateRolePath(rules, cwd, join(cwd, "src", "index.ts")).allowed, true);
+	assert.deepEqual(evaluateRolePath(rules, cwd, join(cwd, "src", "secrets", "key.ts")), { allowed: false, reason: "deny", rule: "src/secrets/**" });
+	assert.deepEqual(evaluateRolePath(rules, cwd, join(cwd, "README.md")), { allowed: false, reason: "no-allow" });
+	assert.equal(evaluateRolePath(rules, cwd, "/tmp/pi-output/report.txt").allowed, true);
+	assert.deepEqual(evaluateRolePath(rules, cwd, "/tmp/other/report.txt"), { allowed: false, reason: "outside-root" });
+});
+
+test("role guard reloads policy and applies global, deny, and allow precedence", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "pi-orchestrator-role-guard-"));
+	await mkdir(join(cwd, ".pi"));
+	await mkdir(join(cwd, "src", "private"), { recursive: true });
+	await writeFile(join(cwd, ".pi", "protected-paths.yaml"), "protectedPaths:\n  - src/global.ts\n");
+	const policyPath = join(cwd, ".pi", "orchestrator-policy.yaml");
+	await writeFile(policyPath, "version: 1\nroles:\n  developer:\n    allow: [src/**]\n    deny: [src/private/**]\n");
+	const previous = {
+		role: process.env.PI_ORCHESTRATOR_AGENT_ROLE,
+		project: process.env.PI_ORCHESTRATOR_PROJECT_ROOT,
+		workspace: process.env.PI_ORCHESTRATOR_WORKSPACE_ROOT,
+		policy: process.env.PI_ORCHESTRATOR_POLICY_CONFIG,
+		global: process.env.PI_ORCHESTRATOR_GLOBAL_PROTECTED_CONFIG,
+	};
+	Object.assign(process.env, {
+		PI_ORCHESTRATOR_AGENT_ROLE: "developer",
+		PI_ORCHESTRATOR_PROJECT_ROOT: cwd,
+		PI_ORCHESTRATOR_WORKSPACE_ROOT: cwd,
+		PI_ORCHESTRATOR_POLICY_CONFIG: policyPath,
+		PI_ORCHESTRATOR_GLOBAL_PROTECTED_CONFIG: join(cwd, ".pi", "protected-paths.yaml"),
+	});
+	const handlers = new Map<string, (...args: any[]) => any>();
+	const pi = {
+		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
+		registerCommand() {},
+	} as unknown as ExtensionAPI;
+	const ctx = { cwd, hasUI: false, ui: { notify() {}, setStatus() {} } } as unknown as ExtensionContext;
+	try {
+		roleGuard(pi);
+		const hook = handlers.get("tool_call");
+		assert.ok(hook);
+		assert.equal(await hook({ toolName: "write", input: { path: "src/index.ts" } }, ctx), undefined);
+		assert.match((await hook({ toolName: "write", input: { path: "src/private/key.ts" } }, ctx)).reason, /deny/);
+		assert.match((await hook({ toolName: "write", input: { path: "src/global.ts" } }, ctx)).reason, /global/);
+		assert.match((await hook({ toolName: "write", input: { path: "README.md" } }, ctx)).reason, /no-allow/);
+		assert.equal(await hook({ toolName: "read", input: { path: "README.md" } }, ctx), undefined);
+		await writeFile(policyPath, "version: 1\nroles:\n  developer:\n    allow: [src/**, README.md]\n    deny: [src/private/**]\n");
+		assert.equal(await hook({ toolName: "write", input: { path: "README.md" } }, ctx), undefined);
+	} finally {
+		for (const [key, value] of Object.entries({
+			PI_ORCHESTRATOR_AGENT_ROLE: previous.role,
+			PI_ORCHESTRATOR_PROJECT_ROOT: previous.project,
+			PI_ORCHESTRATOR_WORKSPACE_ROOT: previous.workspace,
+			PI_ORCHESTRATOR_POLICY_CONFIG: previous.policy,
+			PI_ORCHESTRATOR_GLOBAL_PROTECTED_CONFIG: previous.global,
+		})) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	}
 });
 
 test("rejects duplicate agent roles and missing prompts", async () => {
@@ -186,6 +263,8 @@ test("tmux manager creates a named project session and safely quotes the worker 
 	assert.match(create.args.at(-1) ?? "", /^exec 'env'/);
 	assert.match(create.args.at(-1) ?? "", /'PROMPT=it'"'"'s safe'/);
 	assert.equal(defaultTmuxSession("Demo Project", "/tmp/project"), defaultTmuxSession("Demo Project", "/tmp/project"));
+	await tmux.respawnWorker("pi-demo", "developer-1", "/tmp/project", ["pi", "--no-extensions"]);
+	assert.ok(calls.some((call) => call.args[0] === "respawn-window" && call.args.includes("pi-demo:developer-1")));
 	await tmux.stopWorker("pi-demo", "developer-1");
 	assert.ok(calls.some((call) => call.args[0] === "kill-window" && call.args.at(-1) === "pi-demo:developer-1"));
 	await tmux.stopSession("pi-demo");

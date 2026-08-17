@@ -24,6 +24,7 @@ export interface AgentDefinition {
 
 export interface OrchestratorConfig {
 	version: 1;
+	projectRoot: string;
 	projectName: string;
 	orchestratorThemeProfile?: string | undefined;
 	orchestratorUiTheme: OrchestratorUiTheme;
@@ -180,6 +181,7 @@ export async function loadOrchestratorConfig(path: string, cwd: string): Promise
 
 	return {
 		version: 1,
+		projectRoot: resolve(cwd),
 		projectName,
 		...(orchestratorThemeProfile ? { orchestratorThemeProfile } : {}),
 		orchestratorUiTheme,

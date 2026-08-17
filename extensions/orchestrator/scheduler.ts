@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { OrchestratorConfig } from "./config.ts";
 import { runEphemeralAgent, type AgentRunResult } from "./ephemeral-runner.ts";
@@ -44,7 +46,14 @@ export class AgentScheduler {
 			try {
 				const workspace = await prepareWorkspace(this.pi, instance, this.config.worktreeRoot);
 				this.registry.update(instance.id, { workspacePath: workspace.path, branch: workspace.branch });
-				const result = await runEphemeralAgent(definition, task, workspace.path, signal, onProgress);
+				const result = await runEphemeralAgent(definition, task, workspace.path, signal, onProgress, {
+					role,
+					projectRoot: this.config.projectRoot,
+					workspaceRoot: workspace.root,
+					policyConfig: resolve(this.config.projectRoot, ".pi", "orchestrator-policy.yaml"),
+					globalProtectedConfig: resolve(this.config.projectRoot, ".pi", "protected-paths.yaml"),
+					extensionPath: resolve(dirname(fileURLToPath(import.meta.url)), "role-guard.ts"),
+				});
 				return { ...result, agentId: instance.id, role, workspacePath: workspace.path, ...(workspace.branch ? { branch: workspace.branch } : {}) };
 			} finally {
 				this.registry.update(instance.id, { status: "offline", currentTaskId: undefined });

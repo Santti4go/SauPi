@@ -1,0 +1,13 @@
+# Role-specific mutation policy for examples/orchestrator.yaml.
+version: 1
+roles:
+  developer:
+    allow:
+      - "**" # Replace with the project directories this role may modify.
+    deny: []
+  marketing:
+    allow: []
+    deny: []
+  scout:
+    allow: []
+    deny: []

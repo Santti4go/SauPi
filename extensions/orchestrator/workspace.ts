@@ -5,6 +5,7 @@ import type { AgentInstance } from "./registry.ts";
 
 export interface PreparedWorkspace {
 	path: string;
+	root: string;
 	branch?: string;
 }
 
@@ -17,7 +18,10 @@ export async function prepareWorkspace(
 	instance: AgentInstance,
 	worktreeRoot: string | undefined,
 ): Promise<PreparedWorkspace> {
-	if (instance.definition.workspace === "shared") return { path: instance.definition.cwd };
+	if (instance.definition.workspace === "shared") {
+		const result = await pi.exec("git", ["-C", instance.definition.cwd, "rev-parse", "--show-toplevel"]);
+		return { path: instance.definition.cwd, root: result.code === 0 ? result.stdout.trim() : instance.definition.cwd };
+	}
 
 	const gitRootResult = await pi.exec("git", ["-C", instance.definition.cwd, "rev-parse", "--show-toplevel"]);
 	if (gitRootResult.code !== 0) throw new Error(`Agent ${instance.id} requires a Git repository for worktree isolation`);
@@ -33,7 +37,7 @@ export async function prepareWorkspace(
 	if (existing) {
 		const valid = await pi.exec("git", ["-C", worktreePath, "rev-parse", "--show-toplevel"]);
 		if (valid.code !== 0) throw new Error(`Worktree path exists but is not a Git worktree: ${worktreePath}`);
-		return { path, branch };
+		return { path, root: worktreePath, branch };
 	}
 
 	const branchExists = (await pi.exec("git", ["-C", gitRoot, "show-ref", "--verify", `refs/heads/${branch}`])).code === 0;
@@ -42,5 +46,5 @@ export async function prepareWorkspace(
 		: ["-C", gitRoot, "worktree", "add", "-b", branch, worktreePath, "HEAD"];
 	const created = await pi.exec("git", args);
 	if (created.code !== 0) throw new Error(created.stderr.trim() || `Could not create worktree for ${instance.id}`);
-	return { path, branch };
+	return { path, root: worktreePath, branch };
 }
