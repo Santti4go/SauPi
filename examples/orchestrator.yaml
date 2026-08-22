@@ -9,6 +9,8 @@ defaults:
   lifecycle: persistent
   workspace: shared
   start: lazy
+  skills:
+    - .pi/skills/docs-maintainer/SKILL.md
 
 agents:
   - name: developer
@@ -19,6 +21,8 @@ agents:
     themeProfile: developer
     workspace: worktree
     tools: read, grep, find, ls, bash, edit, write
+    skills:
+      - .pi/skills/developer/SKILL.md
 
   - name: marketing
     description: Product positioning, copy, and communication
@@ -33,6 +37,7 @@ agents:
     prompt: .pi/agents/scout.md
     lifecycle: ephemeral
     tools: read, grep, find, ls
+    skills: all
 
 runtime:
   directory: .pi/orchestrator

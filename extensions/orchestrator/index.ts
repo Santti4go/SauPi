@@ -5,7 +5,7 @@ import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { loadOrchestratorConfig, type OrchestratorConfig } from "./config.ts";
+import { loadOrchestratorConfig, skillCliArgs, type OrchestratorConfig } from "./config.ts";
 import { initializeOrchestrator } from "./init.ts";
 import type { AgentInstance } from "./registry.ts";
 import { AgentRegistry } from "./registry.ts";
@@ -67,6 +67,7 @@ export default function orchestrator(pi: ExtensionAPI): void {
 	const extensionRoot = dirname(fileURLToPath(import.meta.url));
 	const workerExtension = resolve(extensionRoot, "worker/index.ts");
 	const roleGuardExtension = resolve(extensionRoot, "role-guard.ts");
+	const instructionInspectorExtension = resolve(extensionRoot, "../instruction-inspector/index.ts");
 	const themeMapExtension = resolve(extensionRoot, "../theme-map/index.ts");
 	const themesDirectory = resolve(extensionRoot, "../../themes");
 
@@ -139,6 +140,7 @@ export default function orchestrator(pi: ExtensionAPI): void {
 				`PI_ORCHESTRATOR_WORKSPACE_ROOT=${workspace.root}`,
 				`PI_ORCHESTRATOR_POLICY_CONFIG=${resolve(currentContext.cwd, ".pi", "orchestrator-policy.yaml")}`,
 				`PI_ORCHESTRATOR_GLOBAL_PROTECTED_CONFIG=${resolve(currentContext.cwd, ".pi", "protected-paths.yaml")}`,
+				`PI_ORCHESTRATOR_ROLE_PROMPT_PATH=${instance.definition.promptPath}`,
 				...(orchestratorTarget ? [`PI_ORCHESTRATOR_PARENT_TARGET=${orchestratorTarget}`] : []),
 				...currentPiCommand(),
 				"--approve",
@@ -149,6 +151,8 @@ export default function orchestrator(pi: ExtensionAPI): void {
 				workerExtension,
 				"--extension",
 				roleGuardExtension,
+				"--extension",
+				instructionInspectorExtension,
 				"--theme",
 				themesDirectory,
 				"--theme-map-config",
@@ -163,6 +167,7 @@ export default function orchestrator(pi: ExtensionAPI): void {
 				instance.definition.promptPath,
 			];
 			for (const extension of instance.definition.extensionPaths ?? []) command.push("--extension", extension);
+			command.push(...skillCliArgs(instance.definition.skills));
 			if (instance.definition.themeProfile) command.push("--theme-profile", instance.definition.themeProfile);
 			if (instance.definition.model) command.push("--model", instance.definition.model);
 			if (instance.definition.tools) command.push("--tools", instance.definition.tools.join(","));

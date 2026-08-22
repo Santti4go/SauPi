@@ -57,6 +57,8 @@ defaults:
   cwd: . # Default working directory for every agent.
   # model: provider/model-id # Optional Pi model override inherited by every agent.
   tools: read, grep, find, ls # Allowed Pi tools. Use a comma-separated string or YAML list.
+  # skills: # Skills advertised to every worker; agents may add paths or set skills: all.
+  #   - .pi/skills/docs-maintainer/SKILL.md
   # extensions: # Optional explicit extensions loaded by every worker (paths relative to project root).
   #   - ../PiCommon/extensions/provider-gate/index.ts
   # themeProfile: developer # Optional theme-map profile inherited by every agent.
@@ -73,6 +75,8 @@ agents:
     # start: lazy # Overrides defaults.start for persistent workers.
     # cwd: . # Overrides defaults.cwd.
     # themeProfile: developer # Overrides defaults.themeProfile.
+    # skills: # Adds role skills to defaults.skills. Use skills: all for normal discovery without --no-skills.
+    #   - .pi/skills/developer/SKILL.md
 
   - name: agent2
     description: Researches the codebase and returns evidence-backed findings

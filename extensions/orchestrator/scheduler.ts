@@ -53,6 +53,7 @@ export class AgentScheduler {
 					policyConfig: resolve(this.config.projectRoot, ".pi", "orchestrator-policy.yaml"),
 					globalProtectedConfig: resolve(this.config.projectRoot, ".pi", "protected-paths.yaml"),
 					extensionPath: resolve(dirname(fileURLToPath(import.meta.url)), "role-guard.ts"),
+					instructionInspectorPath: resolve(dirname(fileURLToPath(import.meta.url)), "../instruction-inspector/index.ts"),
 				});
 				return { ...result, agentId: instance.id, role, workspacePath: workspace.path, ...(workspace.branch ? { branch: workspace.branch } : {}) };
 			} finally {

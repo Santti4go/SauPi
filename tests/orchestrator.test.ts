@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { loadOrchestratorConfig } from "../extensions/orchestrator/config.ts";
+import { loadOrchestratorConfig, skillCliArgs } from "../extensions/orchestrator/config.ts";
 import { initializeOrchestrator } from "../extensions/orchestrator/init.ts";
 import { encodeMessage, parseMessage } from "../extensions/orchestrator/protocol.ts";
 import { AgentRegistry } from "../extensions/orchestrator/registry.ts";
@@ -57,6 +57,8 @@ defaults:
   lifecycle: persistent
   workspace: shared
   model: gpt-configured
+  skills:
+    - .pi/skills/common/SKILL.md
 agents:
   - name: developer
     description: Builds features
@@ -66,6 +68,12 @@ agents:
     tools: read, edit, write
     extensions:
       - .pi/extensions/audit.ts
+    skills:
+      - .pi/skills/developer/SKILL.md
+  - name: scout
+    description: Discovers every skill
+    prompt: .pi/agents/developer.md
+    skills: all
 `);
 	const config = await loadOrchestratorConfig(path, cwd);
 	assert.equal(config.projectName, "demo");
@@ -75,9 +83,20 @@ agents:
 	assert.equal(config.agents[0]?.model, "gpt-configured");
 	assert.deepEqual(config.agents[0]?.tools, ["read", "edit", "write"]);
 	assert.deepEqual(config.agents[0]?.extensionPaths, [join(cwd, ".pi", "extensions", "audit.ts")]);
+	assert.deepEqual(config.agents[0]?.skills, [
+		join(cwd, ".pi", "skills", "common", "SKILL.md"),
+		join(cwd, ".pi", "skills", "developer", "SKILL.md"),
+	]);
+	assert.deepEqual(skillCliArgs(config.agents[0]!.skills), [
+		"--no-skills",
+		"--skill", join(cwd, ".pi", "skills", "common", "SKILL.md"),
+		"--skill", join(cwd, ".pi", "skills", "developer", "SKILL.md"),
+	]);
+	assert.equal(config.agents[1]?.skills, "all");
+	assert.deepEqual(skillCliArgs(config.agents[1]!.skills), []);
 
 	const registry = new AgentRegistry(config.agents);
-	assert.deepEqual(registry.all().map((agent) => agent.id), ["developer-1", "developer-2"]);
+	assert.deepEqual(registry.all().map((agent) => agent.id), ["developer-1", "developer-2", "scout-1"]);
 	registry.applyHeartbeat({
 		id: "developer-1",
 		role: "developer",

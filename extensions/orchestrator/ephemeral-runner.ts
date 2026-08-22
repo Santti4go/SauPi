@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { AgentDefinition } from "./config.ts";
+import { skillCliArgs, type AgentDefinition } from "./config.ts";
 
 export interface GuardEnvironment {
 	role: string;
@@ -11,6 +11,7 @@ export interface GuardEnvironment {
 	policyConfig: string;
 	globalProtectedConfig: string;
 	extensionPath: string;
+	instructionInspectorPath: string;
 }
 
 export interface AgentRunResult {
@@ -61,9 +62,12 @@ export async function runEphemeralAgent(
 		"--no-extensions",
 		"--extension",
 		guard.extensionPath,
+		"--extension",
+		guard.instructionInspectorPath,
 		"--append-system-prompt",
 		definition.promptPath,
 	];
+	args.push(...skillCliArgs(definition.skills));
 	if (definition.model) args.push("--model", definition.model);
 	if (definition.tools) args.push("--tools", definition.tools.join(","));
 	args.push(`Task: ${task}`);
@@ -78,6 +82,7 @@ export async function runEphemeralAgent(
 			PI_ORCHESTRATOR_WORKSPACE_ROOT: guard.workspaceRoot,
 			PI_ORCHESTRATOR_POLICY_CONFIG: guard.policyConfig,
 			PI_ORCHESTRATOR_GLOBAL_PROTECTED_CONFIG: guard.globalProtectedConfig,
+			PI_ORCHESTRATOR_ROLE_PROMPT_PATH: definition.promptPath,
 		},
 		shell: false,
 		stdio: ["ignore", "pipe", "pipe"],

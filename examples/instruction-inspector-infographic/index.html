@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Infografía técnica de la extensión Instruction Inspector para Pi.">
+  <title>Instruction Inspector · Cómo funciona /instructions watch</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="hero">
+    <div class="hero__grid" aria-hidden="true"></div>
+    <nav class="topbar" aria-label="Contexto">
+      <span class="brand"><span class="brand__mark">π</span> PiCommon</span>
+      <span class="pill">EXTENSION RUNTIME MAP</span>
+    </nav>
+    <div class="hero__content">
+      <div>
+        <p class="eyebrow">OBSERVABILIDAD DEL SYSTEM PROMPT</p>
+        <h1>¿Qué instrucciones<br><em>ve realmente</em> el agente?</h1>
+        <p class="lede"><code>/instructions watch</code> convierte la procedencia del prompt en un widget vivo, sin modificar el contexto ni enviar telemetría al provider.</p>
+        <div class="command-row" aria-label="Comandos disponibles">
+          <code>/instructions</code><code>/instructions full</code><code class="active">/instructions watch</code>
+        </div>
+      </div>
+      <aside class="terminal" aria-label="Ejemplo del widget de Instruction Inspector">
+        <div class="terminal__bar"><span></span><span></span><span></span><b>backend-eng · watch:on</b></div>
+        <pre><span class="cyan">Instructions // backend-eng</span>
+
+<span class="label">System instruction files</span>
+  - .pi/SYSTEM.md
+  - .pi/agents/backend-eng.md
+
+<span class="label">Context files</span>
+  - AGENTS.md
+  - backend/AGENTS.md
+
+<span class="label">Skills advertised to the model</span>
+  - backend-eng: .pi/skills/backend-eng/SKILL.md
+  - docker-tester: .pi/skills/docker-tester/SKILL.md
+
+<span class="label">Skill files read during this session</span>
+  - .pi/skills/backend-eng/SKILL.md
+
+<span class="muted">Tools: read, grep, find, ls, bash, edit, write</span>
+<span class="green">Local inventory latency: 1.24 ms last · 1.51 ms avg</span>
+<span class="green">Provider overhead: 0 requests · 0 injected tokens · $0</span></pre>
+        <div class="terminal__status">instr:4 files/6 skills · 1.2ms</div>
+      </aside>
+    </div>
+  </header>
+
+  <main>
+    <section class="section flow-section" aria-labelledby="flow-title">
+      <div class="section-heading">
+        <p class="eyebrow">01 · FLUJO DE DATOS</p>
+        <h2 id="flow-title">Inspecciona. Clasifica. Muestra.</h2>
+        <p>La extensión observa estructuras que Pi ya construyó. No reconstruye el prompt desde cero y no retorna un nuevo <code>systemPrompt</code>.</p>
+      </div>
+      <div class="flow" role="list">
+        <article class="flow-card" role="listitem">
+          <span class="step">1</span>
+          <div class="flow-card__icon">↳</div>
+          <h3><code>before_agent_start</code></h3>
+          <p>Recibe <code>event.systemPromptOptions</code> y el prompt efectivo encadenado.</p>
+          <ul><li>custom/append prompt</li><li>contextFiles</li><li>skills</li><li>selectedTools</li></ul>
+        </article>
+        <div class="connector" aria-hidden="true">→</div>
+        <article class="flow-card" role="listitem">
+          <span class="step">2</span>
+          <div class="flow-card__icon">⌁</div>
+          <h3>Snapshot local</h3>
+          <p>Resuelve paths, identifica archivos cuyo contenido aparece en las opciones y calcula SHA-256.</p>
+          <ul><li>sin guardar contenido</li><li>fingerprint de 10 chars</li><li>paths deduplicados</li></ul>
+        </article>
+        <div class="connector" aria-hidden="true">→</div>
+        <article class="flow-card" role="listitem">
+          <span class="step">3</span>
+          <div class="flow-card__icon">▤</div>
+          <h3>UI local</h3>
+          <p><code>setStatus</code> mantiene el resumen y <code>setWidget</code> alterna el inventario visible.</p>
+          <ul><li>watch on/off</li><li>paths relativos o full</li><li>sin mensaje al LLM</li></ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section anatomy" aria-labelledby="anatomy-title">
+      <div class="section-heading section-heading--light">
+        <p class="eyebrow">02 · ANATOMÍA DEL INVENTARIO</p>
+        <h2 id="anatomy-title">“Descubierto” no significa “leído”.</h2>
+      </div>
+      <div class="anatomy-grid">
+        <article><span class="tag tag--system">SYSTEM</span><h3>System + role prompt</h3><p>Busca <code>SYSTEM.md</code>, <code>APPEND_SYSTEM.md</code>, flags CLI y <code>PI_ORCHESTRATOR_ROLE_PROMPT_PATH</code>. Los candidatos no explícitos se validan contra <code>customPrompt</code> o <code>appendSystemPrompt</code>.</p></article>
+        <article><span class="tag tag--context">CONTEXT</span><h3>Context files exactos</h3><p>Usa directamente <code>options.contextFiles[].path</code>. Aquí aparecen los <code>AGENTS.md</code> que Pi concatenó, no todos los que existen en el repositorio.</p></article>
+        <article><span class="tag tag--skill">SKILL META</span><h3>Skills anunciadas</h3><p>Pi agrega nombre, descripción y path al prompt cuando <code>read</code> está activo. Se excluyen las skills con <code>disableModelInvocation</code>.</p></article>
+        <article><span class="tag tag--read">SKILL BODY</span><h3>Skills efectivamente leídas</h3><p>El hook <code>tool_result</code> registra un <code>read</code> exitoso si coincide con una skill anunciada o con un archivo llamado <code>SKILL.md</code>.</p></article>
+      </div>
+      <aside class="callout"><b>Regla mental:</b> la metadata de una skill puede estar en el system prompt; el cuerpo de <code>SKILL.md</code> entra al contexto conversacional sólo después de leer el archivo.</aside>
+    </section>
+
+    <section class="section cost" aria-labelledby="cost-title">
+      <div class="section-heading">
+        <p class="eyebrow">03 · TERMÓMETRO DE OVERHEAD</p>
+        <h2 id="cost-title">Costo de provider: cero.<br>Latencia local: medida, no estimada.</h2>
+      </div>
+      <div class="cost-grid">
+        <article class="meter-card">
+          <div class="meter-card__head"><div><span class="metric">LOCAL LATENCY</span><h3>last · avg · max</h3></div><span class="live">● LIVE</span></div>
+          <div class="thermometer" aria-label="Guía operativa de latencia local">
+            <div class="thermometer__fill"></div><div class="thermometer__marker">última muestra</div>
+          </div>
+          <div class="scale"><span>0 ms</span><span>2 ms</span><span>10 ms</span><span>revisar FS</span></div>
+          <p class="fineprint">La barra es una guía operativa, no un benchmark universal. El valor real aparece en el widget y en <code>/instructions</code>. Se mide con <code>performance.now()</code> alrededor de cada snapshot.</p>
+        </article>
+        <article class="zero-card">
+          <div class="zero">0</div>
+          <div><span class="metric">PROVIDER REQUESTS</span><h3>Ninguna llamada adicional</h3><p>La extensión sólo usa filesystem y APIs locales de Pi.</p></div>
+          <hr>
+          <div class="zero">0</div>
+          <div><span class="metric">INJECTED TOKENS</span><h3>$0 de costo directo</h3><p>No usa <code>sendMessage</code>, no registra tools para el modelo y no modifica el prompt.</p></div>
+        </article>
+      </div>
+      <div class="cost-formula">
+        <span>latencia añadida por turno</span>
+        <b>lectura de candidatos + matching + SHA-256(prompt) + render local</b>
+        <span class="equals">provider Δ = 0</span>
+      </div>
+    </section>
+
+    <section class="section technical" aria-labelledby="technical-title">
+      <div class="section-heading section-heading--light">
+        <p class="eyebrow">04 · CONTRATO TÉCNICO</p>
+        <h2 id="technical-title">Qué ocurre al ejecutar <code>/instructions watch</code></h2>
+      </div>
+      <ol class="timeline">
+        <li><span>01</span><div><h3>Alterna un booleano local</h3><p><code>widgetVisible = !widgetVisible</code>. El estado vive en la instancia de la extensión.</p></div></li>
+        <li><span>02</span><div><h3>Reutiliza el snapshot más reciente</h3><p>No dispara un turno del agente. En versiones con <code>getSystemPromptOptions()</code>, el comando puede obtener opciones actuales; de lo contrario usa el snapshot capturado en el primer prompt.</p></div></li>
+        <li><span>03</span><div><h3>Actualiza exclusivamente la TUI</h3><p><code>ctx.ui.setWidget("instruction-inspector", lines)</code> muestra el panel; una segunda invocación pasa <code>undefined</code> y lo elimina.</p></div></li>
+        <li><span>04</span><div><h3>Limpieza garantizada</h3><p><code>session_shutdown</code> elimina status y widget para no dejar UI residual durante reload, resume o cierre.</p></div></li>
+      </ol>
+    </section>
+
+    <section class="section commands" aria-labelledby="commands-title">
+      <div class="section-heading">
+        <p class="eyebrow">05 · GUÍA RÁPIDA</p>
+        <h2 id="commands-title">Tres comandos, una sola fuente de verdad.</h2>
+      </div>
+      <div class="command-grid">
+        <article><code>/instructions</code><p>Snapshot legible con paths relativos al cwd.</p></article>
+        <article><code>/instructions full</code><p>Auditoría con paths absolutos y procedencia inequívoca.</p></article>
+        <article class="featured"><code>/instructions watch</code><p>Activa o desactiva el widget persistente sobre el editor.</p></article>
+      </div>
+      <div class="privacy"><span>✓</span><div><h3>Diseñado para privacidad local</h3><p>Se muestran nombres y paths, nunca el contenido de los archivos. El inventario se renderiza con UI local y no participa en el contexto del modelo.</p></div></div>
+    </section>
+  </main>
+
+  <footer><span>PiCommon · Instruction Inspector</span><span>observable prompts / zero provider overhead</span></footer>
+</body>
+</html>

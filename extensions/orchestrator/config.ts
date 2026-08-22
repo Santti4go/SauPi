@@ -6,6 +6,7 @@ export type AgentLifecycle = "persistent" | "ephemeral";
 export type AgentWorkspace = "shared" | "worktree";
 export type AgentStartMode = "lazy" | "eager";
 export type OrchestratorUiTheme = "orchestrator-list" | "orchestrator-grid";
+export type AgentSkills = "all" | string[];
 
 export interface AgentDefinition {
 	name: string;
@@ -19,6 +20,7 @@ export interface AgentDefinition {
 	model?: string | undefined;
 	tools?: string[] | undefined;
 	extensionPaths?: string[] | undefined;
+	skills: AgentSkills;
 	cwd: string;
 }
 
@@ -42,6 +44,7 @@ interface AgentDefaults {
 	model?: string | undefined;
 	tools?: string[] | undefined;
 	extensionPaths?: string[] | undefined;
+	skills: AgentSkills;
 	cwd: string;
 }
 
@@ -91,6 +94,22 @@ function paths(value: unknown, field: string, cwd: string): string[] | undefined
 	return [...new Set(values.map((item) => resolve(cwd, (item as string).trim())))];
 }
 
+function skillSelection(value: unknown, field: string, cwd: string, fallback: AgentSkills): AgentSkills {
+	if (value === undefined) return fallback;
+	if (value === "all") return "all";
+	if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !(item as string).trim())) {
+		throw new Error(`"${field}" must be "all" or a list of non-empty skill paths`);
+	}
+	const resolved = [...new Set(value.map((item) => resolve(cwd, (item as string).trim())))];
+	if (fallback === "all") return resolved;
+	return [...new Set([...fallback, ...resolved])];
+}
+
+export function skillCliArgs(skills: AgentSkills): string[] {
+	if (skills === "all") return [];
+	return ["--no-skills", ...skills.flatMap((path) => ["--skill", path])];
+}
+
 function count(value: unknown, field: string): number {
 	const result = value === undefined ? 1 : value;
 	if (!Number.isInteger(result) || (result as number) < 1 || (result as number) > 16) {
@@ -117,6 +136,7 @@ function parseDefaults(value: unknown, cwd: string): AgentDefaults {
 		...(optionalText(source.model, "defaults.model") ? { model: text(source.model, "defaults.model") } : {}),
 		...(tools(source.tools, "defaults.tools") ? { tools: tools(source.tools, "defaults.tools") } : {}),
 		...(extensionPaths ? { extensionPaths } : {}),
+		skills: skillSelection(source.skills, "defaults.skills", cwd, "all"),
 		cwd: resolve(cwd, optionalText(source.cwd, "defaults.cwd") ?? "."),
 	};
 }
@@ -130,6 +150,7 @@ function parseAgent(value: unknown, index: number, defaults: AgentDefaults, cwd:
 	const extensionPaths = paths(source.extensions, `${prefix}.extensions`, cwd) ?? defaults.extensionPaths;
 	const themeProfile = optionalText(source.themeProfile, `${prefix}.themeProfile`) ?? defaults.themeProfile;
 	const model = optionalText(source.model, `${prefix}.model`) ?? defaults.model;
+	const skills = skillSelection(source.skills, `${prefix}.skills`, cwd, defaults.skills);
 	return {
 		name,
 		description: text(source.description, `${prefix}.description`),
@@ -142,6 +163,7 @@ function parseAgent(value: unknown, index: number, defaults: AgentDefaults, cwd:
 		...(model ? { model } : {}),
 		...(parsedTools ? { tools: parsedTools } : {}),
 		...(extensionPaths ? { extensionPaths } : {}),
+		skills,
 		cwd: resolve(cwd, optionalText(source.cwd, `${prefix}.cwd`) ?? defaults.cwd),
 	};
 }

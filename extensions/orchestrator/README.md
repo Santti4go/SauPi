@@ -71,6 +71,12 @@ agents:
     tools: read, grep, find, ls, bash, edit, write
 ```
 
+`defaults.skills` define skills comunes. Una lista `skills` en un agente se
+suma a las defaults y el worker se inicia con `--no-skills` más un `--skill` por
+path. `skills: all` conserva el descubrimiento normal de Pi y omite
+`--no-skills`. Si no se configura ninguna selección, se mantiene el
+comportamiento compatible `all`.
+
 Los paths relativos se resuelven desde el directorio del proyecto. Los nombres
 de instancia se forman como `<name>-<N>`; en el ejemplo se crean
 `developer-1` y `developer-2`.
@@ -220,6 +226,8 @@ Comandos:
 - `/agent-send <role> <task>`: delega una tarea manualmente.
 - `/protected-paths-policy` (dentro de un worker): muestra la policy efectiva
   del rol y las protecciones globales.
+- `/instructions`, `/instructions full` y `/instructions watch`: muestran los
+  archivos de instrucciones, context files y skills presentes o leídas.
 
 La selección realizada por `/orchestrator-themes` dura durante la sesión
 actual. Para establecer el valor predeterminado del proyecto debe actualizarse
