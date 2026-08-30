@@ -14,7 +14,11 @@ function shellIsReadOnly(command: string): boolean {
 	if (/[><`]|\$\(|&&|\|\||[;&]/.test(command)) return false;
 	const words = command.trim().split(/\s+/);
 	if (words.length === 0 || !SHELL_COMMANDS.has(words[0]!)) return false;
-	if (words[0] === "git") return ["status", "diff", "log", "show", "branch"].includes(words[1] ?? "status");
+	if (words[0] === "git") {
+		let index = 1;
+		while (words[index] === "-C") index += 2;
+		return ["status", "diff", "log", "show", "branch"].includes(words[index] ?? "");
+	}
 	return true;
 }
 

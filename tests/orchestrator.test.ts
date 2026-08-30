@@ -191,6 +191,7 @@ test("role guard reloads policy and applies global, deny, and allow precedence",
 		assert.match((await hook({ toolName: "write", input: { path: "src/global.ts" } }, ctx)).reason, /global/);
 		assert.match((await hook({ toolName: "write", input: { path: "README.md" } }, ctx)).reason, /no-allow/);
 		assert.equal(await hook({ toolName: "read", input: { path: "README.md" } }, ctx), undefined);
+		assert.equal(await hook({ toolName: "bash", input: { command: "git -C .worktrees/cctv-backend status --short" } }, ctx), undefined);
 		await writeFile(policyPath, "version: 1\nroles:\n  developer:\n    allow: [src/**, README.md]\n    deny: [src/private/**]\n");
 		assert.equal(await hook({ toolName: "write", input: { path: "README.md" } }, ctx), undefined);
 	} finally {
