@@ -21,6 +21,11 @@ export function defaultTmuxSession(projectName: string, cwd: string): string {
 	return `pi-${slug}-${createHash("sha256").update(cwd).digest("hex").slice(0, 6)}`;
 }
 
+export interface TmuxPaneInfo {
+	target: string;
+	currentCommand: string;
+}
+
 export class TmuxManager {
 	constructor(private readonly runner: TmuxCommandRunner) {}
 
@@ -47,6 +52,19 @@ export class TmuxManager {
 	async hasWindow(session: string, window: string): Promise<boolean> {
 		const result = await this.runner.exec("tmux", ["list-windows", "-t", session, "-F", "#{window_name}"]);
 		return result.code === 0 && result.stdout.split("\n").some((name) => name.trim() === window);
+	}
+
+	async paneInfo(session: string, window: string): Promise<TmuxPaneInfo | undefined> {
+		const result = await this.runner.exec("tmux", [
+			"display-message",
+			"-p",
+			"-t",
+			`${session}:${window}`,
+			"#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}",
+		]);
+		if (result.code !== 0 || !result.stdout.trim()) return undefined;
+		const [target = "", currentCommand = ""] = result.stdout.trim().split("\t");
+		return { target, currentCommand };
 	}
 
 	async startWorker(spec: TmuxWorkerSpec): Promise<string> {

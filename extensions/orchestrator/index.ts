@@ -17,7 +17,7 @@ import { prepareWorkspace } from "./workspace.ts";
 
 const DEFAULT_CONFIG = ".pi/orchestrator.yaml";
 const HEARTBEAT_MS = 2_000;
-const JUMP_SHORTCUT = "ctrl+0";
+const JUMP_SHORTCUT = "f8";
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -116,6 +116,55 @@ export default function orchestrator(pi: ExtensionAPI): void {
 	};
 
 	const workerSocket = (id: string) => resolve(`/tmp/pi-orchestrator-${process.getuid?.() ?? "user"}`, projectHash(currentContext?.cwd ?? process.cwd()), `${id}.sock`);
+	const reconciliationLocks = new Map<string, Promise<AgentInstance>>();
+	const shellCommands = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh"]);
+
+	const workerCommand = (instance: AgentInstance, workspaceRoot: string): string[] => {
+		if (!config || !currentContext) throw new Error("Orchestrator is not initialized");
+		const targetName = `${tmuxSession}:${instance.id}`;
+		const command = [
+			"env",
+			`PI_ORCHESTRATOR_AGENT_ID=${instance.id}`,
+			`PI_ORCHESTRATOR_AGENT_ROLE=${instance.role}`,
+			`PI_ORCHESTRATOR_SOCKET=${instance.socketPath ?? workerSocket(instance.id)}`,
+			`PI_ORCHESTRATOR_TMUX_TARGET=${targetName}`,
+			`PI_ORCHESTRATOR_PROJECT_ROOT=${currentContext.cwd}`,
+			`PI_ORCHESTRATOR_WORKSPACE_ROOT=${workspaceRoot}`,
+			`PI_ORCHESTRATOR_POLICY_CONFIG=${resolve(currentContext.cwd, ".pi", "orchestrator-policy.yaml")}`,
+			`PI_ORCHESTRATOR_GLOBAL_PROTECTED_CONFIG=${resolve(currentContext.cwd, ".pi", "protected-paths.yaml")}`,
+			`PI_ORCHESTRATOR_ROLE_PROMPT_PATH=${instance.definition.promptPath}`,
+			...(orchestratorTarget ? [`PI_ORCHESTRATOR_PARENT_TARGET=${orchestratorTarget}`] : []),
+			...currentPiCommand(),
+			"--approve",
+			"--no-extensions",
+			"--extension",
+			themeMapExtension,
+			"--extension",
+			workerExtension,
+			"--extension",
+			roleGuardExtension,
+			"--extension",
+			instructionInspectorExtension,
+			"--theme",
+			themesDirectory,
+			"--theme-map-config",
+			resolve(currentContext.cwd, ".pi/theme-map.yaml"),
+			"--name",
+			instance.id,
+			"--session-dir",
+			resolve(config.runtimeDir, "sessions", instance.id),
+			"--session-id",
+			`${projectHash(currentContext.cwd)}-${instance.id}`,
+			"--append-system-prompt",
+			instance.definition.promptPath,
+		];
+		for (const extension of instance.definition.extensionPaths ?? []) command.push("--extension", extension);
+		command.push(...skillCliArgs(instance.definition.skills));
+		if (instance.definition.themeProfile) command.push("--theme-profile", instance.definition.themeProfile);
+		if (instance.definition.model) command.push("--model", instance.definition.model);
+		if (instance.definition.tools) command.push("--tools", instance.definition.tools.join(","));
+		return command;
+	};
 
 	const startPersistent = async (instance: AgentInstance): Promise<void> => {
 		if (!config || !registry || !tmux || !currentContext) throw new Error("Orchestrator is not initialized");
@@ -126,51 +175,14 @@ export default function orchestrator(pi: ExtensionAPI): void {
 				registry.applyHeartbeat(active);
 				return;
 			}
+			if (await tmux.hasWindow(tmuxSession, instance.id)) {
+				await reconcilePersistent(instance, "worker is not responding");
+				return;
+			}
 			registry.update(instance.id, { status: "starting", socketPath, error: undefined });
 			const workspace = await prepareWorkspace(pi, instance, config.worktreeRoot);
 			await mkdir(resolve(config.runtimeDir, "sessions", instance.id), { recursive: true, mode: 0o700 });
-			const targetName = `${tmuxSession}:${instance.id}`;
-			const command = [
-				"env",
-				`PI_ORCHESTRATOR_AGENT_ID=${instance.id}`,
-				`PI_ORCHESTRATOR_AGENT_ROLE=${instance.role}`,
-				`PI_ORCHESTRATOR_SOCKET=${socketPath}`,
-				`PI_ORCHESTRATOR_TMUX_TARGET=${targetName}`,
-				`PI_ORCHESTRATOR_PROJECT_ROOT=${currentContext.cwd}`,
-				`PI_ORCHESTRATOR_WORKSPACE_ROOT=${workspace.root}`,
-				`PI_ORCHESTRATOR_POLICY_CONFIG=${resolve(currentContext.cwd, ".pi", "orchestrator-policy.yaml")}`,
-				`PI_ORCHESTRATOR_GLOBAL_PROTECTED_CONFIG=${resolve(currentContext.cwd, ".pi", "protected-paths.yaml")}`,
-				`PI_ORCHESTRATOR_ROLE_PROMPT_PATH=${instance.definition.promptPath}`,
-				...(orchestratorTarget ? [`PI_ORCHESTRATOR_PARENT_TARGET=${orchestratorTarget}`] : []),
-				...currentPiCommand(),
-				"--approve",
-				"--no-extensions",
-				"--extension",
-				themeMapExtension,
-				"--extension",
-				workerExtension,
-				"--extension",
-				roleGuardExtension,
-				"--extension",
-				instructionInspectorExtension,
-				"--theme",
-				themesDirectory,
-				"--theme-map-config",
-				resolve(currentContext.cwd, ".pi/theme-map.yaml"),
-				"--name",
-				instance.id,
-				"--session-dir",
-				resolve(config.runtimeDir, "sessions", instance.id),
-				"--session-id",
-				`${projectHash(currentContext.cwd)}-${instance.id}`,
-				"--append-system-prompt",
-				instance.definition.promptPath,
-			];
-			for (const extension of instance.definition.extensionPaths ?? []) command.push("--extension", extension);
-			command.push(...skillCliArgs(instance.definition.skills));
-			if (instance.definition.themeProfile) command.push("--theme-profile", instance.definition.themeProfile);
-			if (instance.definition.model) command.push("--model", instance.definition.model);
-			if (instance.definition.tools) command.push("--tools", instance.definition.tools.join(","));
+			const command = workerCommand(instance, workspace.root);
 			const target = await tmux.startWorker({
 				session: tmuxSession,
 				window: instance.id,
@@ -197,6 +209,67 @@ export default function orchestrator(pi: ExtensionAPI): void {
 			registry.update(instance.id, { status: "failed", error: errorMessage(error) });
 			throw error;
 		}
+	};
+
+	const reconcilePersistent = async (instance: AgentInstance, reason: string): Promise<AgentInstance> => {
+		const existing = reconciliationLocks.get(instance.id);
+		if (existing) return existing;
+		const promise = (async () => {
+			if (!config || !registry || !tmux || !currentContext) throw new Error("Orchestrator is not initialized");
+			const socketPath = instance.socketPath ?? workerSocket(instance.id);
+			const log = (message: string) => currentContext?.ui.notify(`reconcile ${instance.id}: ${message}`, "info");
+			log(`starting (${reason})`);
+			registry.update(instance.id, { socketPath, error: undefined });
+
+			const active = await pingWorker(socketPath).catch((error) => {
+				log(`handshake failed on known socket: ${errorMessage(error)}`);
+				return undefined;
+			});
+			if (active) {
+				const workspace = instance.workspacePath ? undefined : await prepareWorkspace(pi, instance, config.worktreeRoot);
+				registry.applyHeartbeat(active);
+				registry.update(instance.id, {
+					socketPath,
+					...(workspace ? { workspacePath: workspace.path, branch: workspace.branch } : {}),
+					tmuxTarget: active.tmuxTarget ?? instance.tmuxTarget,
+					error: undefined,
+				});
+				log("handshake succeeded; runtime metadata refreshed");
+				return registry.get(instance.id)!;
+			}
+
+			if (!(await tmux.hasSession(tmuxSession))) throw new Error(`Worker ${instance.id} cannot be reconciled: tmux session ${tmuxSession} does not exist`);
+			if (!(await tmux.hasWindow(tmuxSession, instance.id))) throw new Error(`Worker ${instance.id} cannot be reconciled: tmux window ${tmuxSession}:${instance.id} does not exist`);
+			const pane = await tmux.paneInfo(tmuxSession, instance.id);
+			if (!pane) throw new Error(`Worker ${instance.id} cannot be reconciled: tmux pane ${tmuxSession}:${instance.id} is unavailable`);
+			registry.update(instance.id, { tmuxTarget: pane.target });
+			const command = pane.currentCommand.toLowerCase();
+			if (shellCommands.has(command)) {
+				throw new Error(`Worker ${instance.id} cannot be reconciled: pane ${pane.target} is only a shell (${pane.currentCommand})`);
+			}
+
+			log(pane.currentCommand ? `respawning worker process in existing pane ${pane.target} (current command: ${pane.currentCommand})` : `respawning dead worker process in existing pane ${pane.target}`);
+			const workspace = await prepareWorkspace(pi, instance, config.worktreeRoot);
+			await mkdir(resolve(config.runtimeDir, "sessions", instance.id), { recursive: true, mode: 0o700 });
+			registry.update(instance.id, { status: "starting", socketPath, workspacePath: workspace.path, branch: workspace.branch, error: undefined });
+			await tmux.respawnWorker(tmuxSession, instance.id, workspace.path, workerCommand(instance, workspace.root));
+			const deadline = Date.now() + 20_000;
+			while (Date.now() < deadline) {
+				const snapshot = await pingWorker(socketPath).catch(() => undefined);
+				if (snapshot) {
+					registry.applyHeartbeat(snapshot);
+					log("respawn succeeded; handshake completed");
+					return registry.get(instance.id)!;
+				}
+				await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+			}
+			throw new Error(`Worker ${instance.id} process was respawned in pane ${pane.target}, but protocol handshake timed out`);
+		})().catch((error) => {
+			registry?.update(instance.id, { status: "failed", error: errorMessage(error) });
+			throw error;
+		}).finally(() => reconciliationLocks.delete(instance.id));
+		reconciliationLocks.set(instance.id, promise);
+		return promise;
 	};
 
 	const heartbeatOnce = async () => {
@@ -280,7 +353,7 @@ export default function orchestrator(pi: ExtensionAPI): void {
 			if (!(await tmux.available())) throw new Error("tmux is not available");
 			tmuxSession = config.tmuxSession ?? defaultTmuxSession(config.projectName, ctx.cwd);
 			orchestratorTarget = await tmux.currentTarget();
-			scheduler = new AgentScheduler(pi, config, registry, { startPersistent });
+			scheduler = new AgentScheduler(pi, config, registry, { startPersistent, reconcilePersistent });
 			registerDelegateTool(config.agents.map((agent) => agent.name));
 			registry.subscribe(renderRoster);
 			installRosterWidget(ctx);

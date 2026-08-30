@@ -233,14 +233,9 @@ La selección realizada por `/orchestrator-themes` dura durante la sesión
 actual. Para establecer el valor predeterminado del proyecto debe actualizarse
 `orchestrator.uiTheme` en `.pi/orchestrator.yaml`.
 
-`Ctrl+0` abre el selector de agentes desde el orquestador. Dentro de un
-worker, el mismo shortcut y `/agent-jump` regresan al pane original del
-orquestador. Fuera de tmux, `/agent-jump` muestra el comando `tmux
-attach-session` correspondiente.
-
-El terminal debe transmitir `Ctrl+0` como una tecla extendida. En Windows
-Terminal puede mapearse a `sendInput` con `"input": "\u001b[48;5u"`; tmux debe
-tener `extended-keys on` y `extended-keys-format csi-u`.
+`F8` abre el selector de agentes desde el orquestador. Dentro de un worker, el
+mismo shortcut y `/agent-jump` regresan al pane original del orquestador. Fuera
+de tmux, `/agent-jump` muestra el comando `tmux attach-session` correspondiente.
 
 Al cerrar Pi (`Ctrl+C`, `Ctrl+D` o una señal de terminación), el orquestador
 cierra su sesión tmux y todos los workers asociados. Un `/reload`, `/new`,

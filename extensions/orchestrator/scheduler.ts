@@ -6,11 +6,12 @@ import type { OrchestratorConfig } from "./config.ts";
 import { runEphemeralAgent, type AgentRunResult } from "./ephemeral-runner.ts";
 import type { AgentInstance } from "./registry.ts";
 import { AgentRegistry } from "./registry.ts";
-import { runWorkerTask } from "./worker-client.ts";
+import { pingWorker, runWorkerTask } from "./worker-client.ts";
 import { prepareWorkspace } from "./workspace.ts";
 
 export interface SchedulerHooks {
 	startPersistent(instance: AgentInstance): Promise<void>;
+	reconcilePersistent(instance: AgentInstance, reason: string): Promise<AgentInstance>;
 }
 
 export interface DispatchResult extends AgentRunResult {
@@ -62,9 +63,10 @@ export class AgentScheduler {
 		}
 
 		const taskId = randomUUID();
-		const instance = await this.acquirePersistent(candidates, taskId, signal);
-		if (!instance.socketPath || !instance.workspacePath) throw new Error(`Worker ${instance.id} is missing runtime metadata`);
+		let instance = await this.acquirePersistent(candidates, taskId, signal);
 		try {
+			instance = await this.ensurePersistent(instance);
+			if (!instance.socketPath || !instance.workspacePath) throw new Error(`Worker ${instance.id} is missing runtime metadata after reconciliation`);
 			const result = await runWorkerTask(instance.socketPath, taskId, task, signal, onProgress);
 			return {
 				output: result.output,
@@ -78,6 +80,16 @@ export class AgentScheduler {
 			};
 		} finally {
 			this.registry.update(instance.id, { status: "idle", currentTaskId: undefined });
+		}
+	}
+
+	private async ensurePersistent(instance: AgentInstance): Promise<AgentInstance> {
+		if (!instance.socketPath || !instance.workspacePath) return this.hooks.reconcilePersistent(instance, "missing runtime metadata");
+		try {
+			this.registry.applyHeartbeat(await pingWorker(instance.socketPath));
+			return instance;
+		} catch (error) {
+			return this.hooks.reconcilePersistent(instance, `worker handshake failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 

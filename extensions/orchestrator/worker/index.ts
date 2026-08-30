@@ -98,6 +98,7 @@ export default function orchestratorWorker(pi: ExtensionAPI): void {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
 		context = ctx;
 		status = "idle";
 		pi.setSessionName(id);
@@ -175,7 +176,7 @@ export default function orchestratorWorker(pi: ExtensionAPI): void {
 		handler: async (_args, ctx) => jumpToOrchestrator(ctx),
 	});
 
-	pi.registerShortcut("ctrl+0", {
+	pi.registerShortcut("f8", {
 		description: "Jump back to the orchestrator tmux pane",
 		handler: jumpToOrchestrator,
 	});
