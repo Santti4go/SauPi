@@ -151,6 +151,7 @@ roles:
 	assert.equal(evaluateRolePath(rules, cwd, join(cwd, "src", "index.ts")).allowed, true);
 	assert.deepEqual(evaluateRolePath(rules, cwd, join(cwd, "src", "secrets", "key.ts")), { allowed: false, reason: "deny", rule: "src/secrets/**" });
 	assert.deepEqual(evaluateRolePath(rules, cwd, join(cwd, "README.md")), { allowed: false, reason: "no-allow" });
+	assert.deepEqual(evaluateRolePath({ ...rules, allow: ["**"] }, cwd, cwd), { allowed: true, reason: "allow", rule: "**" });
 	assert.equal(evaluateRolePath(rules, cwd, "/tmp/pi-output/report.txt").allowed, true);
 	assert.deepEqual(evaluateRolePath(rules, cwd, "/tmp/other/report.txt"), { allowed: false, reason: "outside-root" });
 });

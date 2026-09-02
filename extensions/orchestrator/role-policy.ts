@@ -65,7 +65,7 @@ export function evaluateRolePath(rules: RoleRules, root: string, path: string): 
 		const projectPath = relative(root, path).replaceAll(sep, "/") || ".";
 		const denied = glob(rules.deny, projectPath);
 		if (denied) return { allowed: false, reason: "deny", rule: denied };
-		const allowed = glob(rules.allow, projectPath);
+		const allowed = glob(rules.allow, projectPath) ?? (projectPath === "." ? glob(rules.allow, "**") : undefined);
 		return allowed ? { allowed: true, reason: "allow", rule: allowed } : { allowed: false, reason: "no-allow" };
 	}
 	const denied = glob(rules.deny, path.replaceAll(sep, "/"));
