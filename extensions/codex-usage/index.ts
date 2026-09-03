@@ -113,7 +113,7 @@ async function refreshCodexAuth(auth: CodexAuth): Promise<CodexAuth> {
 		signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 	});
 	if (!response.ok) throw new Error(`No se pudo renovar la sesión (HTTP ${response.status})`);
-	const result = await response.json() as { access_token?: unknown; refresh_token?: unknown };
+	const result = await response.json() as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown };
 	if (typeof result.access_token !== "string" || typeof result.refresh_token !== "string") {
 		throw new Error("Respuesta de renovación OAuth no válida");
 	}
@@ -122,7 +122,12 @@ async function refreshCodexAuth(auth: CodexAuth): Promise<CodexAuth> {
 	const path = auth.path;
 	const parsed = JSON.parse(await readFile(path, "utf8")) as AuthFile;
 	const updated: AuthFile = auth.format === "pi"
-		? { ...parsed, access: result.access_token, refresh: result.refresh_token }
+		? {
+			...parsed,
+			access: result.access_token,
+			refresh: result.refresh_token,
+			...(typeof result.expires_in === "number" ? { expires: Date.now() + result.expires_in * 1000 - 300_000 } : {}),
+		}
 		: {
 			...parsed,
 			tokens: {
@@ -216,8 +221,19 @@ export default function codexUsage(pi: ExtensionAPI): void {
 				usage = await fetchUsage(auth);
 			} catch (error) {
 				if (!(error instanceof UsageHttpError) || error.status !== 401) throw error;
-				auth = await refreshCodexAuth(auth);
-				usage = await fetchUsage(auth);
+
+				// Pi puede haber renovado auth.json en paralelo. Releer antes de
+				// intentar otro refresh evita invalidar/rotar refresh tokens válidos.
+				const latestAuth = await readCodexAuth();
+				if (!latestAuth) throw new Error("No se encontró una sesión OAuth de Pi");
+				try {
+					usage = await fetchUsage(latestAuth);
+					auth = latestAuth;
+				} catch (latestError) {
+					if (!(latestError instanceof UsageHttpError) || latestError.status !== 401) throw latestError;
+					auth = await refreshCodexAuth(latestAuth);
+					usage = await fetchUsage(auth);
+				}
 			}
 			latestStatus = formatStatus(usage);
 			setStatus(ctx, latestStatus);
