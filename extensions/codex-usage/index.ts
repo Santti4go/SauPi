@@ -53,16 +53,16 @@ type UsageResponse = {
 };
 
 type UsageWindow = {
-		used_percent?: unknown;
-		reset_after_seconds?: unknown;
-		reset_at?: unknown;
+	used_percent?: unknown;
+	reset_after_seconds?: unknown;
+	reset_at?: unknown;
 };
 
 type CodexUsage = {
-		fiveHourPercent: number;
-		weeklyPercent: number;
-		fiveHourResetAt?: number;
-		weeklyResetAt?: number;
+	fiveHourPercent: number;
+	weeklyPercent: number;
+	fiveHourResetAt?: number;
+	weeklyResetAt?: number;
 };
 
 function authPaths(): string[] {
@@ -182,18 +182,16 @@ function parseUsage(value: unknown): CodexUsage | undefined {
 	return usage;
 }
 
-function resetText(resetAt: number | undefined): string {
-	if (resetAt === undefined) return "";
-	const remaining = Math.max(0, resetAt * 1000 - Date.now());
-	const hours = Math.floor(remaining / 3_600_000);
-	const minutes = Math.floor((remaining % 3_600_000) / 60_000);
-	return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+type UsageColor = "accent" | "warning" | "error";
+
+function usageColor(remainder: number): UsageColor {
+	if (remainder >= 60) return "accent"; // azul (color primario del tema)
+	if (remainder >= 30) return "warning"; // amarillo
+	return "error"; // rojo
 }
 
 export function formatStatus(usage: CodexUsage): string {
-	const fiveHourReset = resetText(usage.fiveHourResetAt);
-	const weeklyReset = resetText(usage.weeklyResetAt);
-	return `${EXTENSION_NAME}: 5h ${usage.fiveHourPercent}%${fiveHourReset ? ` (${fiveHourReset})` : ""} | semanal ${usage.weeklyPercent}%${weeklyReset ? ` (${weeklyReset})` : ""}`;
+	return `${EXTENSION_NAME}: ${usage.fiveHourPercent}% | ${usage.weeklyPercent}%`;
 }
 
 async function fetchUsage(auth: CodexAuth): Promise<CodexUsage> {
@@ -218,6 +216,7 @@ export default function codexUsage(pi: ExtensionAPI): void {
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let inFlight = false;
 	let latestStatus: string | undefined;
+	let latestUsage: CodexUsage | undefined;
 
 	const setStatus = (ctx: ExtensionContext, text: string | undefined) => {
 		if (ctx.hasUI) ctx.ui.setStatus(EXTENSION_NAME, text);
@@ -248,10 +247,12 @@ export default function codexUsage(pi: ExtensionAPI): void {
 					usage = await fetchUsage(auth);
 				}
 			}
+			latestUsage = usage;
 			latestStatus = formatStatus(usage);
 			setStatus(ctx, latestStatus);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "error desconocido";
+			latestUsage = undefined;
 			latestStatus = `${EXTENSION_NAME}: ${message}`;
 			setStatus(ctx, latestStatus);
 			if (notifyOnError && ctx.hasUI) ctx.ui.notify(`CodexUsage: ${message}`, "warning");
@@ -264,6 +265,7 @@ export default function codexUsage(pi: ExtensionAPI): void {
 		if (timer !== undefined) clearInterval(timer);
 		timer = undefined;
 		latestStatus = undefined;
+		latestUsage = undefined;
 		setStatus(ctx, undefined);
 		if (ctx.hasUI) ctx.ui.setFooter(undefined);
 	};
@@ -271,10 +273,14 @@ export default function codexUsage(pi: ExtensionAPI): void {
 	const installFooter = (ctx: ExtensionContext) => {
 		if (!ctx.hasUI) return;
 		ctx.ui.setFooter((_tui, theme) => ({
-			invalidate() {},
+			invalidate() { },
 			render(width: number): string[] {
 				const model = theme.fg("dim", ctx.model?.id || "sin-modelo");
-				const usage = latestStatus ? theme.fg("dim", latestStatus) : theme.fg("dim", `${EXTENSION_NAME}: consultando...`);
+				const remaining5h = 100 - latestUsage?.fiveHourPercent;
+				const remainingWeek = 100 - latestUsage?.weeklyPercent;
+				const usage = latestUsage
+					? `${theme.fg("dim", `TokensRemainig: `)} ${theme.fg(usageColor(remaining5h), `${remaining5h}%`)}${theme.fg("dim", " | ")}${theme.fg(usageColor(remainingWeek), `${remainingWeek}%`)}`
+					: theme.fg("dim", latestStatus || `${EXTENSION_NAME}: consultando...`);
 				const separator = theme.fg("dim", "  ·  ");
 				return [truncateToWidth(`${" ".repeat(Math.max(1, width - visibleWidth(usage) - visibleWidth(separator) - visibleWidth(model)))}${usage}${separator}${model}`, width, "")];
 			},
