@@ -23,6 +23,8 @@ type CodexAuth = {
 	accessToken: string;
 	accountId: string;
 	refreshToken?: string;
+	path: string;
+	format: "pi" | "codex";
 };
 
 class UsageHttpError extends Error {
@@ -53,28 +55,46 @@ type CodexUsage = {
 		weeklyResetAt?: number;
 };
 
-function authPath(): string {
-	return join(process.env.CODEX_HOME || join(homedir(), ".codex"), "auth.json");
+function authPaths(): string[] {
+	const piDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+	const codexDir = process.env.CODEX_HOME || join(homedir(), ".codex");
+	return [join(piDir, "auth.json"), join(codexDir, "auth.json")];
 }
 
 async function readCodexAuth(): Promise<CodexAuth | undefined> {
-	try {
-		const parsed = JSON.parse(await readFile(authPath(), "utf8")) as AuthFile;
-		const accessToken = parsed.tokens?.access_token;
-		const refreshToken = parsed.tokens?.refresh_token;
-		const accountId = parsed.tokens?.account_id;
-		if (typeof accessToken !== "string" || !accessToken || typeof accountId !== "string" || !accountId) {
-			return undefined;
+	for (const path of authPaths()) {
+		try {
+			const parsed = JSON.parse(await readFile(path, "utf8")) as AuthFile;
+			// Pi stores this provider as { type, access, refresh, accountId }.
+			const piAuth = parsed as AuthFile & { access?: unknown; refresh?: unknown; accountId?: unknown };
+			if (typeof piAuth.access === "string" && typeof piAuth.accountId === "string") {
+				return {
+					accessToken: piAuth.access,
+					accountId: piAuth.accountId,
+					...(typeof piAuth.refresh === "string" && piAuth.refresh ? { refreshToken: piAuth.refresh } : {}),
+					path,
+					format: "pi",
+				};
+			}
+
+			// Legacy/native Codex stores OAuth tokens under `tokens`.
+			const accessToken = parsed.tokens?.access_token;
+			const refreshToken = parsed.tokens?.refresh_token;
+			const accountId = parsed.tokens?.account_id;
+			if (typeof accessToken === "string" && accessToken && typeof accountId === "string" && accountId) {
+				return {
+					accessToken,
+					accountId,
+					...(typeof refreshToken === "string" && refreshToken ? { refreshToken } : {}),
+					path,
+					format: "codex",
+				};
+			}
+		} catch {
+			// Try the next location; the final error is shown in the footer.
 		}
-		return {
-			accessToken,
-			accountId,
-			...(typeof refreshToken === "string" && refreshToken ? { refreshToken } : {}),
-		};
-	} catch {
-		// Missing or malformed auth.json is reported through the footer status.
-		return undefined;
 	}
+	return undefined;
 }
 
 const CODEX_OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token";
@@ -99,21 +119,24 @@ async function refreshCodexAuth(auth: CodexAuth): Promise<CodexAuth> {
 	}
 
 	// Conserva campos que Codex pueda añadir y actualiza el archivo atómicamente.
-	const path = authPath();
+	const path = auth.path;
 	const parsed = JSON.parse(await readFile(path, "utf8")) as AuthFile;
-	const updated: AuthFile = {
-		...parsed,
-		tokens: {
-			...parsed.tokens,
-			access_token: result.access_token,
-			refresh_token: result.refresh_token,
-		},
-	};
+	const updated: AuthFile = auth.format === "pi"
+		? { ...parsed, access: result.access_token, refresh: result.refresh_token }
+		: {
+			...parsed,
+			tokens: {
+				...parsed.tokens,
+				access_token: result.access_token,
+				refresh_token: result.refresh_token,
+			},
+		};
+
 	const temporaryPath = `${path}.codex-usage.tmp-${process.pid}`;
 	await writeFile(temporaryPath, `${JSON.stringify(updated, null, 2)}\n`, { mode: 0o600 });
 	await chmod(temporaryPath, 0o600);
 	await rename(temporaryPath, path);
-	return { accessToken: result.access_token, accountId: auth.accountId, refreshToken: result.refresh_token };
+	return { accessToken: result.access_token, accountId: auth.accountId, refreshToken: result.refresh_token, path, format: auth.format };
 }
 
 function percent(value: unknown): number | undefined {
