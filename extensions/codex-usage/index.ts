@@ -16,6 +16,16 @@ type AuthFile = {
 		account_id?: unknown;
 		[key: string]: unknown;
 	};
+	"openai-codex"?: PiOAuthCredential;
+	[key: string]: unknown;
+};
+
+type PiOAuthCredential = {
+	type?: unknown;
+	access?: unknown;
+	refresh?: unknown;
+	accountId?: unknown;
+	expires?: unknown;
 	[key: string]: unknown;
 };
 
@@ -65,9 +75,9 @@ async function readCodexAuth(): Promise<CodexAuth | undefined> {
 	for (const path of authPaths()) {
 		try {
 			const parsed = JSON.parse(await readFile(path, "utf8")) as AuthFile;
-			// Pi stores this provider as { type, access, refresh, accountId }.
-			const piAuth = parsed as AuthFile & { access?: unknown; refresh?: unknown; accountId?: unknown };
-			if (typeof piAuth.access === "string" && typeof piAuth.accountId === "string") {
+			// Pi stores this provider under the `openai-codex` key.
+			const piAuth = parsed["openai-codex"];
+			if (typeof piAuth?.access === "string" && typeof piAuth.accountId === "string") {
 				return {
 					accessToken: piAuth.access,
 					accountId: piAuth.accountId,
@@ -124,9 +134,12 @@ async function refreshCodexAuth(auth: CodexAuth): Promise<CodexAuth> {
 	const updated: AuthFile = auth.format === "pi"
 		? {
 			...parsed,
-			access: result.access_token,
-			refresh: result.refresh_token,
-			...(typeof result.expires_in === "number" ? { expires: Date.now() + result.expires_in * 1000 - 300_000 } : {}),
+			"openai-codex": {
+				...parsed["openai-codex"],
+				access: result.access_token,
+				refresh: result.refresh_token,
+				...(typeof result.expires_in === "number" ? { expires: Date.now() + result.expires_in * 1000 - 300_000 } : {}),
+			},
 		}
 		: {
 			...parsed,
