@@ -23,7 +23,7 @@ tests/
 npm install
 pi install -l .
 # Desde un remoto SSH (el prefijo git: es obligatorio para el formato git@host:path)
-pi install -l git:git@github.com:usuario/PiCommon.git
+pi install -l git:git@github.com:usuario/SauPi.git
 ```
 
 `-l` instala la referencia en el `settings.json` del proyecto; no limita los
@@ -34,7 +34,7 @@ recursos del paquete. Para elegir extensiones por proyecto, ejecute
 {
   "packages": [
     {
-      "source": "/ruta/a/PiCommon",
+      "source": "/ruta/a/SauPi",
       "extensions": [
         "extensions/theme-map/index.ts",
         "extensions/orchestrator/index.ts"
@@ -121,7 +121,7 @@ Para inicializar otro proyecto:
 
 ```bash
 mkdir -p .pi
-cp /ruta/a/PiCommon/examples/theme-map.yaml .pi/theme-map.yaml
+cp /ruta/a/SauPi/examples/theme-map.yaml .pi/theme-map.yaml
 ```
 
 La selección inicial sigue este orden:
