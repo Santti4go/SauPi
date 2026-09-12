@@ -279,7 +279,7 @@ export default function codexUsage(pi: ExtensionAPI): void {
 				const remaining5h = 100 - latestUsage?.fiveHourPercent;
 				const remainingWeek = 100 - latestUsage?.weeklyPercent;
 				const usage = latestUsage
-					? `${theme.fg("dim", `TokensRemainig: `)} ${theme.fg(usageColor(remaining5h), `${remaining5h}%`)}${theme.fg("dim", " | ")}${theme.fg(usageColor(remainingWeek), `${remainingWeek}%`)}`
+					? `${theme.fg("dim", `monthly: `)} ${theme.fg(usageColor(remaining5h), `${remaining5h}%`)}${theme.fg("dim", " | weekly: ")}${theme.fg(usageColor(remainingWeek), `${remainingWeek}%`)}`
 					: theme.fg("dim", latestStatus || `${EXTENSION_NAME}: consultando...`);
 				const separator = theme.fg("dim", "  ·  ");
 				return [truncateToWidth(`${" ".repeat(Math.max(1, width - visibleWidth(usage) - visibleWidth(separator) - visibleWidth(model)))}${usage}${separator}${model}`, width, "")];
