@@ -8,7 +8,9 @@
   ],
   "scripts": {
     "test": "node --import tsx --test tests/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:pi-session-network-real": "PI_REAL_TUI_TESTS=1 node --import tsx --test tests/pi-session-network-real.test.ts",
+    "coordinator": "tsx extensions/pi-session-network/coordinator.ts"
   },
   "pi": {
     "extensions": [
@@ -27,11 +29,11 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.78.0",
-    "@earendil-works/pi-tui": "0.78.0",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
     "@types/node": "^24.12.0",
-    "typebox": "1.1.38",
     "tsx": "^4.20.0",
+    "typebox": "1.1.38",
     "typescript": "^5.9.0"
   }
 }

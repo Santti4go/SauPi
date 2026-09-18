@@ -9,6 +9,7 @@ extensions/
   orchestrator/     Pools de agentes efímeros y persistentes sobre tmux
   pi-anim/          Animación senoidal durante el trabajo del agente
   provider-gate/    Aprobación humana antes de cada request al provider
+  pi-session-network/ Registro y listado de sesiones TUI activas
   provider-wire-debug/ Proxy HTTP opt-in para inspeccionar el body real
   protected-paths/  Hook previo a herramientas y política de paths
   theme-map/        Perfiles de tema configurables por proyecto
@@ -141,6 +142,13 @@ input humano, pero registra en la UI cada request aplicable.
 
 La documentación de comandos, `DROP LAST TURN`, persistencia y opciones está en
 [extensions/provider-gate/README.md](extensions/provider-gate/README.md).
+
+## Sesiones Pi activas
+
+`pi-session-network` permite listar y comunicar TUI activas, además de crear
+agentes RPC administrados mediante su coordinador. Debe estar habilitada en
+cada TUI que se quiera descubrir. Consulte
+[extensions/pi-session-network/README.md](extensions/pi-session-network/README.md).
 
 ## Provider wire debug
 
