@@ -35,7 +35,7 @@ function processAlive(pid: number): boolean {
 }
 
 function pick(sessions: DiscoveredSession[], target: string): DiscoveredSession {
-	const matches = sessions.filter((item) => item.endpointId === target || item.endpointId.startsWith(target) || item.sessionName === target);
+	const matches = sessions.filter((item) => item.endpointId.startsWith(target) || item.sessionName === target);
 	if (matches.length !== 1) throw new Error(matches.length ? `Ambiguous endpoint: ${matches.map((item) => item.endpointId).join(", ")}` : `Endpoint not found: ${target}`);
 	return matches[0]!;
 }
@@ -76,10 +76,9 @@ export class Coordinator {
 		this.server = createServer((socket) => this.accept(socket));
 		try {
 			await new Promise<void>((resolve, reject) => {
-				const fail = (error: Error) => reject(error);
-				this.server!.once("error", fail);
+				this.server!.once("error", reject);
 				this.server!.listen(this.controlPath, () => {
-					this.server!.off("error", fail);
+					this.server!.off("error", reject);
 					resolve();
 				});
 			});
@@ -90,7 +89,7 @@ export class Coordinator {
 			throw error;
 		}
 		this.gcTimer = setInterval(() => void collectGarbage().catch(() => undefined), 60_000);
-		await this.history("coordinator_started").catch(() => undefined);
+		await writeHistory("coordinator_started").catch(() => undefined);
 	}
 
 	async stop(): Promise<void> {
@@ -102,7 +101,7 @@ export class Coordinator {
 		await unlink(this.controlPath).catch(() => undefined);
 		await this.lock?.close().catch(() => undefined);
 		await unlink(this.lockPath).catch(() => undefined);
-		await this.history("coordinator_stopped").catch(() => undefined);
+		await writeHistory("coordinator_stopped").catch(() => undefined);
 	}
 
 	async spawn(cwd: string, name: string): Promise<LiveSession> {
@@ -132,7 +131,7 @@ export class Coordinator {
 		const unsubscribe = worker.onEvent((event) => void this.handleWorkerEvent(endpointId, event));
 		const timer = setInterval(() => void this.refreshWorker(endpointId), HEARTBEAT_MS);
 		this.workers.set(endpointId, { worker, endpoint, timer, unsubscribe, startedAt });
-		await this.history("rpc_spawned", { endpointId, pid: worker.pid, cwd: directory, name }).catch(() => undefined);
+		await writeHistory("rpc_spawned", { endpointId, pid: worker.pid, cwd: directory, name }).catch(() => undefined);
 		return endpoint.snapshot();
 	}
 
@@ -210,7 +209,7 @@ export class Coordinator {
 		managed.unsubscribe();
 		if (terminate) await managed.worker.stop();
 		await managed.endpoint.stop();
-		await this.history("rpc_exited", { endpointId }).catch(() => undefined);
+		await writeHistory("rpc_exited", { endpointId }).catch(() => undefined);
 	}
 
 	private async acquireLock(): Promise<void> {
@@ -264,9 +263,6 @@ export class Coordinator {
 		}
 	}
 
-	private history(event: string, details: object = {}): Promise<void> {
-		return writeHistory(event, details);
-	}
 }
 
 async function coordinatorCall(method: string, params: object = {}): Promise<Record<string, unknown>> {

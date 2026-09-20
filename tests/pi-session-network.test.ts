@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -195,6 +195,9 @@ test("ignores malformed and insecure registry entries", async () => {
 		await writeFile(join(root, "registry", `${endpointId}.json`), "not json", { mode: 0o600 });
 		const otherId = randomUUID();
 		await writeFile(join(root, "registry", `${otherId}.json`), JSON.stringify(metadata(root, otherId)), { mode: 0o644 });
+		const linkedId = randomUUID();
+		await writeFile(join(parent, "linked.json"), JSON.stringify(metadata(root, linkedId)), { mode: 0o600 });
+		await symlink(join(parent, "linked.json"), join(root, "registry", `${linkedId}.json`));
 		assert.deepEqual(await listLiveSessions([root]), []);
 	} finally {
 		await rm(parent, { recursive: true, force: true });

@@ -99,7 +99,7 @@ async function ensurePrivateDirectory(path: string): Promise<void> {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 	}
 	const stat = await lstat(path);
-	if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid()) throw new Error(`Unsafe runtime directory: ${path}`);
+	if (!stat.isDirectory() || stat.uid !== uid()) throw new Error(`Unsafe runtime directory: ${path}`);
 	await chmod(path, 0o700);
 }
 
@@ -175,7 +175,7 @@ export class LiveEndpoint {
 	private writeTask: Promise<void> | undefined;
 	private closed = false;
 
-	constructor(private readonly root: string, info: LiveSession, private readonly actions: EndpointActions = {}) {
+	constructor(root: string, info: LiveSession, private readonly actions: EndpointActions = {}) {
 		this.info = info;
 		this.registryPath = join(root, "registry", `${info.endpointId}.json`);
 	}
@@ -190,10 +190,9 @@ export class LiveEndpoint {
 		server.on("error", () => undefined);
 		try {
 			await new Promise<void>((resolve, reject) => {
-				const fail = (error: Error) => reject(error);
-				server.once("error", fail);
+				server.once("error", reject);
 				server.listen(this.info.socketPath, () => {
-					server.off("error", fail);
+					server.off("error", reject);
 					resolve();
 				});
 			});
@@ -319,9 +318,7 @@ export class LiveEndpoint {
 		for (const [id, entry] of this.messages) if (Date.now() - entry.at > MESSAGE_CACHE_MS) this.messages.delete(id);
 		if (this.messages.size >= 1_000) this.messages.delete(this.messages.keys().next().value as string);
 		const messageSource = source(params.source);
-		const text = params.text;
-		const delivery = params.delivery;
-		const messageId = params.messageId;
+		const { text, delivery, messageId } = params;
 		const result = Promise.resolve().then(() => this.actions.deliver!({
 			text,
 			delivery,
@@ -355,7 +352,7 @@ async function readRoot(root: string): Promise<Candidate[]> {
 	try {
 		for (const directory of [root, registry]) {
 			const stat = await lstat(directory);
-			if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid() || (stat.mode & 0o077) !== 0) return [];
+			if (!stat.isDirectory() || stat.uid !== uid() || (stat.mode & 0o077) !== 0) return [];
 		}
 		const sessions: Candidate[] = [];
 		for (const name of await readdir(registry)) {
@@ -363,7 +360,7 @@ async function readRoot(root: string): Promise<Candidate[]> {
 			try {
 				const path = join(registry, name);
 				const stat = await lstat(path);
-				if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== uid() || (stat.mode & 0o077) !== 0 || stat.size > MAX_FRAME_BYTES) continue;
+				if (!stat.isFile() || stat.uid !== uid() || (stat.mode & 0o077) !== 0 || stat.size > MAX_FRAME_BYTES) continue;
 				const value: unknown = JSON.parse(await readFile(path, "utf8"));
 				if (isLiveSession(value) && name === `${value.endpointId}.json`) sessions.push({ root, info: value });
 			} catch {}

@@ -60,8 +60,9 @@ export class RpcProcess {
 		}
 	}
 
-	getState(): Promise<RpcState> {
-		return this.data<RpcState>({ type: "get_state" });
+	async getState(): Promise<RpcState> {
+		const response = await this.send({ type: "get_state" });
+		return response.data as RpcState;
 	}
 
 	async deliver(message: string, delivery: "steer" | "followUp"): Promise<void> {
@@ -82,11 +83,6 @@ export class RpcProcess {
 			const force = setTimeout(() => { child.kill("SIGKILL"); resolve(); }, 2_000);
 			child.once("exit", () => { clearTimeout(force); resolve(); });
 		});
-	}
-
-	private async data<T>(command: Record<string, unknown>): Promise<T> {
-		const response = await this.send(command);
-		return response.data as T;
 	}
 
 	private send(command: Record<string, unknown>, timeout = 10_000): Promise<Record<string, unknown>> {
