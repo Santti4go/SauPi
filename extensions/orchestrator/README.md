@@ -125,9 +125,11 @@ Bash se trata como mutante salvo para comandos read-only simples; comandos
 ambiguos se bloquean. Dentro de un worker, `/protected-paths-policy` muestra el
 rol, roots, YAML y reglas efectivas. El status del pane muestra `guard:<rol>`.
 
-`extensions` permite cargar extensiones explícitas en los workers aun cuando
-éstos usan `--no-extensions`. Los paths son relativos al proyecto; por ejemplo,
-para habilitar la compuerta en un rol persistente:
+`extensions` carga extensiones explícitas con `--no-extensions`. `+path` agrega
+paths a `defaults.extensions`; una lista que empieza con un path sin `+` sigue
+reemplazando las defaults. `- []` reinicia la lista en ese punto. Los paths son
+relativos al proyecto. Ver [selección y reset](extension-selection.md).
+Por ejemplo, para agregar la compuerta sin perder las extensiones comunes:
 
 ```yaml
 agents:
@@ -136,7 +138,7 @@ agents:
     prompt: .pi/agents/reviewer.md
     lifecycle: persistent
     extensions:
-      - ../PiCommon/extensions/provider-gate/index.ts
+      - +../PiCommon/extensions/provider-gate/index.ts
 ```
 
 El `provider-gate` queda inicialmente en bypass, como en cualquier sesión Pi.
@@ -154,10 +156,12 @@ para conversar directamente con él.
 Los workers se lanzan con `--no-extensions` y sólo cargan explícitamente:
 
 - `theme-map`;
-- el runtime interno `orchestrator/worker`.
+- el runtime interno `orchestrator/worker`;
+- `role-guard` e `instruction-inspector`;
+- las extensiones configuradas en el YAML.
 
-Por lo tanto no cargan `provider-gate`, el orquestador principal ni otras
-extensiones del proyecto.
+Las demás extensiones del proyecto no se descubren automáticamente. Resetear
+`extensions` no quita el runtime ni las protecciones obligatorias.
 
 `start: lazy` crea el worker al recibir su primera tarea. `start: eager` lo
 inicia durante el arranque del orquestador.
@@ -165,7 +169,8 @@ inicia durante el arranque del orquestador.
 ### Ephemeral
 
 Un agente efímero ejecuta `pi --mode json --print --no-session`, comienza con
-contexto limpio y termina después de una tarea. También usa `--no-extensions`.
+contexto limpio y termina después de una tarea. También usa `--no-extensions`,
+con `role-guard`, `instruction-inspector` y las extensiones del YAML explícitas.
 Es apropiado para investigación o revisiones puntuales.
 
 ## Distribución
