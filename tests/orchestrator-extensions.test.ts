@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 import { stringify } from "yaml";
 import { loadOrchestratorConfig } from "../extensions/orchestrator/config.ts";
@@ -101,9 +100,7 @@ for (const selection of [["+voice.ts"], [[], "+voice.ts"], []]) {
 		const args = ephemeralAgentArgs(definition, "smoke", guard);
 		assert.ok(args.includes("--no-extensions"));
 		assert.deepEqual(args.flatMap((arg, i) => arg === "--extension" ? [args[i + 1]] : []), [
-			guard.extensionPath, guard.instructionInspectorPath,
-			fileURLToPath(new URL("../extensions/instruction-strip/index.ts", import.meta.url)),
-			...definition.extensionPaths!,
+			guard.extensionPath, guard.instructionInspectorPath, ...definition.extensionPaths!,
 		]);
 		assert.equal(args.at(-1), "Task: smoke");
 	});

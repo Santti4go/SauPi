@@ -6,8 +6,9 @@
  * system/append/role prompt files, Pi-provided context files (`AGENTS.md`),
  * skill metadata advertised in the system prompt, and skill files successfully
  * read during the session. The widget and notifications are local TUI output:
- * this extension does not modify the system prompt, inject model messages, or
- * make provider requests.
+ * the inventory is never injected into model messages. Existing instruction
+ * hooks also compact Markdown on the fly without writing source files or
+ * making additional provider requests.
  *
  * Important semantic boundary: arbitrary files read with the `read` tool are
  * conversation/tool context, not system instructions. At present only known
@@ -26,6 +27,7 @@ import { readFile } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import type { BuildSystemPromptOptions, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { compactAgentInstructions, stripProviderInstructions } from "./compact.ts";
 
 export interface InstructionSnapshot {
 	role: string;
@@ -179,7 +181,11 @@ export default function instructionInspector(pi: ExtensionAPI): void {
 		latestOptions = event.systemPromptOptions;
 		latest = await measuredSnapshot(event.systemPromptOptions, event.systemPrompt);
 		updateUi(ctx);
+		return compactAgentInstructions(event);
 	});
+
+	// Pi adds XML separators and other extensions can append instructions later.
+	pi.on("before_provider_request", (event) => stripProviderInstructions(event.payload));
 
 	pi.on("tool_result", (event, ctx) => {
 		if (event.toolName !== "read" || event.isError) return;

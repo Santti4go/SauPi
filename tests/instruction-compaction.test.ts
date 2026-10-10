@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { BuildSystemPromptOptions, ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import instructionStrip, { stripInstructionMarkdown, stripInstructionOptions } from "../extensions/instruction-strip/index.ts";
+import type { BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
+import { compactAgentInstructions, stripInstructionMarkdown, stripInstructionOptions } from "../extensions/instruction-inspector/compact.ts";
 
 test("removes heading markers and folds real line endings into spaces", () => {
 	assert.equal(stripInstructionMarkdown("# Rol\r\n\r\n## Reglas ##\nUna regla.\rOtra regla.\n"), "Rol Reglas Una regla. Otra regla.");
@@ -47,16 +47,9 @@ test("compacts instruction options without changing file objects or other sectio
 	assert.equal(options.sections?.other, "# Otro\nTexto");
 });
 
-test("registers the structured before_agent_start hook", () => {
-	let handler: ((event: { systemPromptOptions: BuildSystemPromptOptions; systemPrompt: string }) => { systemPrompt: string } | undefined) | undefined;
-	instructionStrip({
-		on: (name: string, callback: typeof handler) => {
-			assert.equal(name, "before_agent_start");
-			handler = callback;
-		},
-	} as unknown as ExtensionAPI);
+test("compacts instructions in the existing before_agent_start hook", () => {
 	const options = { cwd: "/project", appendSystemPrompt: "## Agent\nRule" };
-	const result = handler!({ systemPromptOptions: options, systemPrompt: "Default\n## Agent\nRule\nTools" });
+	const result = compactAgentInstructions({ systemPromptOptions: options, systemPrompt: "Default\n## Agent\nRule\nTools" });
 	assert.equal(options.appendSystemPrompt, "Agent Rule");
 	assert.equal(result?.systemPrompt, "Default\nAgent Rule\nTools");
 });
