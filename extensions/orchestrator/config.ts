@@ -85,13 +85,24 @@ function tools(value: unknown, field: string): string[] | undefined {
 	return normalized.length > 0 ? normalized : undefined;
 }
 
-function paths(value: unknown, field: string, cwd: string): string[] | undefined {
-	if (value === undefined) return undefined;
+function extensionSelection(value: unknown, field: string, cwd: string, inherited?: string[]): string[] | undefined {
+	if (value === undefined) return inherited;
 	const values = typeof value === "string" ? [value] : value;
-	if (!Array.isArray(values) || values.some((item) => typeof item !== "string" || !(item as string).trim())) {
-		throw new Error(`"${field}" must be a non-empty string or string list`);
+	if (!Array.isArray(values)) throw new Error(`"${field}" must be a path or a list of paths and [] resets`);
+	const first = values[0];
+	// A plain first path preserves legacy replacement; +path starts from defaults.
+	const replace = values.length === 0 || (typeof first === "string" && !first.trim().startsWith("+"));
+	const selected = new Set<string>(replace ? [] : inherited);
+	for (const item of values) {
+		if (Array.isArray(item) && item.length === 0) {
+			selected.clear();
+			continue;
+		}
+		const entry = text(item, field);
+		const path = text(entry.startsWith("+") ? entry.slice(1) : entry, field);
+		selected.add(resolve(cwd, path));
 	}
-	return [...new Set(values.map((item) => resolve(cwd, (item as string).trim())))];
+	return [...selected];
 }
 
 function skillSelection(value: unknown, field: string, cwd: string, fallback: AgentSkills): AgentSkills {
@@ -127,7 +138,7 @@ function validateName(value: string, field: string): string {
 
 function parseDefaults(value: unknown, cwd: string): AgentDefaults {
 	const source = optionalMapping(value, "defaults");
-	const extensionPaths = paths(source.extensions, "defaults.extensions", cwd);
+	const extensionPaths = extensionSelection(source.extensions, "defaults.extensions", cwd);
 	return {
 		lifecycle: choice(source.lifecycle, "defaults.lifecycle", ["persistent", "ephemeral"], "persistent"),
 		workspace: choice(source.workspace, "defaults.workspace", ["shared", "worktree"], "shared"),
@@ -147,7 +158,7 @@ function parseAgent(value: unknown, index: number, defaults: AgentDefaults, cwd:
 	const name = validateName(text(source.name, `${prefix}.name`), `${prefix}.name`);
 	const prompt = text(source.prompt, `${prefix}.prompt`);
 	const parsedTools = tools(source.tools, `${prefix}.tools`) ?? defaults.tools;
-	const extensionPaths = paths(source.extensions, `${prefix}.extensions`, cwd) ?? defaults.extensionPaths;
+	const extensionPaths = extensionSelection(source.extensions, `${prefix}.extensions`, cwd, defaults.extensionPaths);
 	const themeProfile = optionalText(source.themeProfile, `${prefix}.themeProfile`) ?? defaults.themeProfile;
 	const model = optionalText(source.model, `${prefix}.model`) ?? defaults.model;
 	const skills = skillSelection(source.skills, `${prefix}.skills`, cwd, defaults.skills);

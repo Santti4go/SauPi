@@ -46,14 +46,7 @@ function assistantText(message: Record<string, unknown>): string {
 		.join("\n");
 }
 
-export async function runEphemeralAgent(
-	definition: AgentDefinition,
-	task: string,
-	cwd: string,
-	signal: AbortSignal | undefined,
-	onProgress: ((message: string) => void) | undefined,
-	guard: GuardEnvironment,
-): Promise<AgentRunResult> {
+export function ephemeralAgentArgs(definition: AgentDefinition, task: string, guard: GuardEnvironment): string[] {
 	const args = [
 		"--mode",
 		"json",
@@ -67,11 +60,24 @@ export async function runEphemeralAgent(
 		"--append-system-prompt",
 		definition.promptPath,
 	];
+	for (const extension of definition.extensionPaths ?? []) args.push("--extension", extension);
 	args.push(...skillCliArgs(definition.skills));
 	if (definition.model) args.push("--model", definition.model);
 	if (definition.tools) args.push("--tools", definition.tools.join(","));
 	args.push(`Task: ${task}`);
 
+	return args;
+}
+
+export async function runEphemeralAgent(
+	definition: AgentDefinition,
+	task: string,
+	cwd: string,
+	signal: AbortSignal | undefined,
+	onProgress: ((message: string) => void) | undefined,
+	guard: GuardEnvironment,
+): Promise<AgentRunResult> {
+	const args = ephemeralAgentArgs(definition, task, guard);
 	const invocation = piInvocation(args);
 	const child = spawn(invocation.command, invocation.args, {
 		cwd,
