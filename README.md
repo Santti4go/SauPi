@@ -7,6 +7,7 @@ Paquete local de Pi con extensiones separadas y configuración de proyecto.
 ```text
 extensions/
   orchestrator/     Pools de agentes efímeros y persistentes sobre tmux
+  instruction-strip/ Compacta Markdown de instrucciones antes de enviarlo al LLM
   pi-anim/          Animación senoidal durante el trabajo del agente
   provider-gate/    Aprobación humana antes de cada request al provider
   provider-wire-debug/ Proxy HTTP opt-in para inspeccionar el body real
@@ -69,6 +70,13 @@ workers Pi interactivos en tmux y expone agentes efímeros para tareas puntuales
 
 La configuración, comandos, shortcuts, worktrees y modelo de seguridad están en
 [extensions/orchestrator/README.md](extensions/orchestrator/README.md).
+
+## Instrucciones compactas
+
+`instruction-strip` quita los numerales de encabezados y convierte los saltos de
+línea de prosa en espacios al cargar system/append prompts y `AGENTS.md`.
+También se carga en los agentes del orquestador. Preserva código y archivos
+originales. [Detalles](extensions/instruction-strip/README.md).
 
 ## Paths protegidos
 

@@ -145,6 +145,8 @@ export default function orchestrator(pi: ExtensionAPI): void {
 			roleGuardExtension,
 			"--extension",
 			instructionInspectorExtension,
+			"--extension",
+			resolve(extensionRoot, "../instruction-strip/index.ts"),
 			"--theme",
 			themesDirectory,
 			"--theme-map-config",

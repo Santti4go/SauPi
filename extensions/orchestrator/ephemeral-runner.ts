@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
+import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import { skillCliArgs, type AgentDefinition } from "./config.ts";
 
@@ -57,6 +58,8 @@ export function ephemeralAgentArgs(definition: AgentDefinition, task: string, gu
 		guard.extensionPath,
 		"--extension",
 		guard.instructionInspectorPath,
+		"--extension",
+		fileURLToPath(new URL("../instruction-strip/index.ts", import.meta.url)),
 		"--append-system-prompt",
 		definition.promptPath,
 	];
